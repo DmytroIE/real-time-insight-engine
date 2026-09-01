@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/node-red" },
+    { "path": "packages/device-enless-twin-temp" },
+    { "path": "packages/app-twin-temp-failed-closed" },
+    { "path": "packages/deployment-ug65-example" }
+  ]
+}

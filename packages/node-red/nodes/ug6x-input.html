@@ -1,0 +1,34 @@
+<script type="text/javascript">
+  RED.nodes.registerType('ug6x-input', {
+    category: 'sxs industrial',
+    color: '#8fb8a8',
+    defaults: {
+      name: { value: '' },
+      engine: { value: '', type: 'industrial-engine', required: true },
+      readinessPolicy: { value: 'reject', required: true },
+    },
+    inputs: 1,
+    outputs: 1,
+    label: function () {
+      return this.name || 'UG6x Input';
+    },
+  });
+</script>
+
+<script type="text/html" data-template-name="ug6x-input">
+  <div class="form-row">
+    <label for="node-input-name">Name</label>
+    <input type="text" id="node-input-name" />
+  </div>
+  <div class="form-row">
+    <label for="node-input-engine">Engine</label>
+    <input type="text" id="node-input-engine" />
+  </div>
+  <div class="form-row">
+    <label for="node-input-readinessPolicy">When not ready</label>
+    <select id="node-input-readinessPolicy">
+      <option value="reject">Reject</option>
+      <option value="queue">Queue</option>
+    </select>
+  </div>
+</script>

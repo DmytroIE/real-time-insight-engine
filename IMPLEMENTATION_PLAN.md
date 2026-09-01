@@ -1,0 +1,114 @@
+# Implementation Plan
+
+This is the execution checklist for implementing `ARCHITECTURE.md`. It contains 38 ordered steps so a coding agent can complete and validate one bounded unit at a time.
+
+## How to use this plan
+
+- Follow the steps in order unless a step explicitly says it may run in parallel.
+- Read the referenced acceptance tests before coding.
+- Keep a step unchecked until its implementation, tests, and listed commands pass.
+- Prefer the smallest complete change. Do not pre-implement later steps.
+- Record validation evidence in the Progress Log.
+- `old_code/` is read-only reference material. Exclude `old_code/temp/`.
+
+## Phase A: Bootstrap and contracts
+
+- [x] **01. Capture the baseline toolchain.** Record development Node/npm versions in the Progress Log, verify Git status, and confirm Node.js 18 compatibility can be tested. No source code yet. Verify: commands complete and no user changes are reverted.
+- [x] **02. Create the npm monorepo skeleton.** Add the root `package.json`, workspace directories from `ARCHITECTURE.md`, shared scripts, and package manifests without domain implementation. Require a modern npm for workspace development while keeping packed artifacts npm-6-installable. Verify: `npm install` and workspace discovery.
+- [x] **03. Configure TypeScript.** Add strict shared and per-package `tsconfig` files targeting Node.js 18, declaration output, source maps, and clean `dist/` directories. Verify: an empty `npm run typecheck` and `npm run build` pass.
+- [x] **04. Configure formatting, linting, and tests.** Add the selected formatter, ESLint, Vitest, and root scripts including `format:check`, `lint`, `typecheck`, `test`, `build`, and `verify`. Verify: `npm run verify` passes on the skeleton.
+- [x] **05. Define shared IDs, enums, and time abstractions.** Add branded/string ID types, entity kinds, process-state enums, `Clock`, and controllable timer interfaces. Verify: unit tests cover enum ordering and fake-clock advancement. Tests: CORE-01.
+- [x] **06. Define immutable event contracts.** Add discriminated Engine event unions, serializable sources, `EventSink`, and an Engine-scoped in-memory bus with subscribe/unsubscribe. Verify: ordered delivery, wildcard filtering helper behavior, and listener cleanup. Tests: EVT-01, EVT-02.
+- [x] **07. Define state storage contracts.** Add `StateStore`, key namespaces, versioned snapshot types, and an in-memory adapter for tests. Verify: load/save/delete/keys and deep-copy isolation. Tests: STATE-01.
+- [x] **08. Define plugin and configuration contracts.** Add Device/Application manifests, factories, schemas, stable type IDs, and explicit registries. Verify duplicate/missing type failures without dynamic loading. Tests: CFG-01, CFG-02.
+- [x] **09. Implement configuration validation.** Add Ajv-based top-level and plugin validation, default application without input mutation, relationship resolution checks, and clear JSON-path errors. Verify representative valid and invalid configurations. Tests: CFG-03 through CFG-07.
+
+## Phase B: Core domain
+
+- [x] **10. Implement the diagnostic registry.** Add diagnostic identity, condition/session retention, persistence DTOs, material-change detection, occurrence counters, and lifecycle events. Verify raise/update/no-op-observation/clear behavior. Tests: DIAG-01 through DIAG-04.
+- [x] **11. Implement scoped diagnostic reporting.** Add evaluation scopes whose `report()` calls reconcile only after success and are discarded after exceptions. Verify automatic clears without null payloads and owner-scope isolation. Tests: DIAG-05 through DIAG-08.
+- [x] **12. Implement Datastream value queries.** Add bounded state, sorted samples, inclusive range lookup, last value, and average value. Equal `(datastreamId, timestamp)` samples replace rather than duplicate. Verify with deterministic fixtures. Tests: DS-01 through DS-04.
+- [x] **13. Implement Datastream updates and stale evaluation.** Add age/length pruning, hardware/no-data flags, due timestamps, startup grace behavior, persistence marking, diagnostics, and update events. Verify independent checks with a fake clock. Tests: DS-05 through DS-09.
+- [x] **14. Implement Device base behavior.** Add child registration, own `hwError`, aggregate `error`, payload-plugin boundary, state DTOs, and diagnostics. Verify child errors aggregate and clear correctly. Tests: DEV-01 through DEV-04.
+- [x] **15. Implement Asset base behavior.** Add Application registration, maximum `currState`, aggregate error, defaults, and state DTOs. Verify empty and multi-Application aggregation. Tests: ASSET-01 through ASSET-03.
+- [x] **16. Implement the Application runner.** Add scheduling fields, overlap policy, pre-run common-state reset, stale refresh, atomic plugin result commit, exception handling, and execution diagnostics. Verify exact failure state: `currState=0`, `noDataError=false`, `appError=true`. Tests: APP-01 through APP-06.
+- [x] **17. Implement parent recomputation coalescing.** Add one injected trailing timer per Device/Asset, dirty-during-run follow-up, synchronous startup/reset recompute, and shutdown flush. Verify no lost trailing update. Tests: AGG-01 through AGG-04.
+- [x] **18. Implement the Engine object graph.** Construct instance-owned registries in Device/Datastream/Asset/Application order, reject duplicate IDs and unresolved mappings, and expose no mutable maps. Verify independent Engine instances do not leak state. Tests: ENG-01 through ENG-04.
+- [x] **19. Implement Engine snapshot reads.** Add immutable entity, family, and whole-Engine DTOs; dotted state projections; `missingPaths`; and strict-path errors. Verify no live references escape. Tests: SNAP-01 through SNAP-06.
+
+## Phase C: Lifecycle, persistence, and scheduling
+
+- [x] **20. Implement snapshot persistence.** Serialize versioned entity states and condition diagnostics, restore valid state, remove obsolete keys only after successful construction, and initialize defaults for empty state. Tests: STATE-02 through STATE-05.
+- [x] **21. Implement state migrations and corrupt-state recovery.** Add schema/plugin migration hooks and clean fallback with diagnostics when state cannot be parsed or migrated. Preserve corrupt input for diagnosis where the adapter permits. Tests: STATE-06 through STATE-08.
+- [x] **22. Implement Engine lifecycle.** Add `starting`, `ready`, `resetting`, `failed`, and `stopping`; authoritative `isReady`; nonpersistent `sessionId/sessionStartTs`; replayable lifecycle state; and `engine.ready`. Tests: LIFE-01 through LIFE-06.
+- [x] **23. Implement the Datastream stale scheduler.** Initially use the behavior-preserving bounded due scan, schedule every Datastream including unmapped ones, isolate task failures, and clean up timers. Tests: SCHED-01 through SCHED-04.
+- [x] **24. Implement the Application scheduler.** Run overdue Applications once, do not replay missed intervals, prevent overlap according to the chosen policy, isolate failures, and clean up timers. Tests: SCHED-05 through SCHED-08.
+- [x] **25. Implement wall-clock jump detection and cold reset.** Compare wall and monotonic elapsed time, derive/configure the threshold, gate ingestion, clear Engine-owned state through `StateStore`, rebuild defaults, persist, and reopen readiness. Tests: CLOCK-01 through CLOCK-05.
+- [x] **26. Implement coordinated Engine shutdown.** Close readiness, stop schedulers, reject new work, finish parent recomputation, save state, unsubscribe listeners, and support repeated close calls. Tests: LIFE-07 through LIFE-09.
+
+## Phase D: First plugins and deployment profile
+
+- [x] **27. Implement the Enless Twin Temperature Device plugin.** Add manifest/schema/defaults, payload validation, `temp1`/`temp2` parsing, range faults, and scoped diagnostics using normalized envelope time. Tests: PLUG-DEV-01 through PLUG-DEV-05.
+- [x] **28. Implement the Twin Temperature Failed Closed Application plugin.** Add manifest/schema/defaults and transactional calculation of averages, operating state, process state, errors, and diagnostics without `logPayload`. Tests: PLUG-APP-01 through PLUG-APP-08.
+- [x] **29. Add the UG65 example profile.** Register only the two implemented plugins, provide validated example JSON, and prove unavailable types fail startup. Tests: PROFILE-01 through PROFILE-03.
+
+## Phase E: Node-RED integration
+
+- [x] **30. Create Node-RED package metadata and test harness.** Add `node-red.nodes`, runtime/editor entry points, Node-RED 3.0.2 compatibility metadata, and `node-red-node-test-helper`. Verify node discovery. Tests: NR-01.
+- [x] **31. Implement the Engine config node.** Own exactly one Engine, adapt the selected context store, expose lifecycle/state APIs to referencing nodes, report status, and close cleanly. Tests: NR-02 through NR-06.
+- [x] **32. Implement the UG6x Input node.** Normalize top-level `deviceName` and `gatewayTime`, preserve raw payload, call `engine.ingest`, handle readiness policy, set status, and use `done(error)` only for unexpected adapter failures. Tests: NR-07 through NR-12.
+- [x] **33. Implement Engine Message Receiver filtering and replay.** Add engine reference, event-pattern filters, one output, serializable envelopes, subscribe/unsubscribe, and immediate lifecycle replay. Tests: NR-13 through NR-17.
+- [x] **34. Implement Receiver delivery shaping.** Force immediate ordered delivery for lifecycle/diagnostic transitions and add latest-per-source coalescing for eligible events with 100 ms trailing/500 ms maximum delay. Tests: NR-18 through NR-21.
+- [x] **35. Implement Engine State Snapshot node.** Preserve the input message, handle configured/dynamic requests, attach immutable results to `msg.snapshot`, report missing paths, support strict mode, and call `done(error)` on invalid requests. Tests: NR-22 through NR-28.
+
+## Phase F: Release validation
+
+- [x] **36. Add end-to-end smoke flows.** Test cold startup, lifecycle gate, whole-Engine initialization snapshot, valid/invalid input, stale transition, Application execution, diagnostics, restart restoration, and shutdown. Tests: E2E-01 through E2E-05.
+- [x] **37. Validate packed artifacts on the production toolchain.** Run `npm pack`, inspect archive contents, install only the selected profile/artifacts in a clean Node.js 18 environment using npm 6.14.9, start Node-RED 3.0.2, and run the smoke flow. Tests: PACK-01 through PACK-04.
+- [x] **38. Complete the release-readiness review.** Run `npm run verify`, check every acceptance test, inspect dependency/license/security reports, measure gateway-relevant CPU/memory/event-loop behavior, update README operations, and leave no unchecked step or unexplained skip. Do not publish or deploy without explicit approval.
+
+## Progress Log
+
+Add one row only after completing or blocking a step. Keep evidence concise.
+
+| Date | Step | Status | Validation / blocker |
+| --- | --- | --- | --- |
+| 2026-08-31 | Handoff | complete | Architecture, agent instructions, implementation plan, and acceptance catalog prepared; no implementation started. |
+| 2026-08-31 | 01 | complete | Host: Node 22.13.1, npm 10.3.0, Git 2.39.1, PowerShell 5.1; `docker run --rm node:18-bookworm-slim` verified Node 18.20.8. Git baseline recorded on `master`; no user changes reverted. |
+| 2026-08-31 | 02 | complete | `npm install`; `npm run workspaces:list`; `npm ls --workspaces --depth=0`; five local packages resolved at 0.1.0 with exact internal ranges and no `workspace:*`; audit found 0 vulnerabilities. |
+| 2026-08-31 | 03 | complete | `npm run typecheck`; `npm run build`; all five packages emitted JavaScript, declarations, and maps; Docker Node 18.20.8 loaded every compiled CommonJS entry point. |
+| 2026-08-31 | 04 | complete | Prettier 3, ESLint 9/typescript-eslint 8, and Vitest 3 configured; `npm run verify` and `npm audit --audit-level=high` pass. ESLint 9 is the final Node-18-compatible major; ESLint 10 requires Node 20. |
+| 2026-08-31 | 05 | complete | `npm test -- packages/core/test/core-01.test.ts` (3 tests); `npm run verify`; branded IDs, entity/process enums, clock/timer contracts, and independent fake wall/monotonic advancement validated. |
+| 2026-08-31 | 06 | complete | `npm test -- packages/core/test/events.test.ts` (4 tests); `npm run verify`; ordered reentrant delivery, wildcard filters, listener-failure isolation, unsubscribe/close cleanup, and per-Engine bus isolation validated. |
+| 2026-08-31 | 07 | complete | `npm test -- packages/core/test/state-store.test.ts` (2 tests); `npm run verify`; async CRUD, escaped Engine/entity key namespaces, generic versioned snapshots, and save/load deep-copy isolation validated. |
+| 2026-08-31 | 08 | complete | `npm test -- packages/core/test/plugins.test.ts` (3 tests); `npm run typecheck`; `npm run verify`; typed Device/Application manifests and factories, serializable configuration DTOs, stable-ID resolution, and duplicate/missing/wrong-kind failures validated. |
+| 2026-08-31 | 09 | complete | Ajv 8 added with 0 audit findings; `npm test -- packages/core/test/configuration-validator.test.ts` (10 tests); `npm run verify`; cloned defaults, top-level/plugin schemas, JSON-path errors, bounds/IDs, relationships, and unknown-field rejection validated. |
+| 2026-08-31 | 10 | complete | `npm test -- packages/core/test/diagnostics.test.ts` (5 tests); `npm run verify`; tuple identity, condition/session retention DTOs, material updates, identical-observation counters, cloned reads, and single explicit clear events validated. |
+| 2026-08-31 | 11 | complete | `npm test -- packages/core/test/diagnostic-scopes.test.ts` (4 tests); `npm run verify`; successful complete-set reconciliation, empty-scope clears, exception discard, owner isolation, and condition-only restart restoration validated. |
+| 2026-08-31 | 12 | complete | `npm test -- packages/core/test/datastream-values.test.ts` (6 tests); `npm run verify`; sorted upserts, equal-timestamp replacement, age/length bounds with minimum length 2, restored-state capping, inclusive queries, averages, nulls, and immutable reads validated. |
+| 2026-08-31 | 13 | complete | `npm test -- packages/core/test/datastream.test.ts` (5 tests); `npm run verify`; valid/rejected input, 1.5 interval margin, startup grace, non-postponing early checks, independent stale evaluation, diagnostics, recovery, persistence marking, and update events validated. |
+| 2026-08-31 | 14 | complete | `npm test -- packages/core/test/device.test.ts` (4 tests); `npm run verify`; defaults, child registration, own/child error aggregation and clearing, state DTOs, async parser boundary, and invalid-payload diagnostic reconciliation validated. |
+| 2026-08-31 | 15 | complete | `npm test -- packages/core/test/asset.test.ts` (3 tests); `npm run verify`; empty defaults, Application registration, maximum process-state aggregation, exact child error predicate, final clearing, persistence marking, and update events validated. |
+| 2026-08-31 | 16 | complete | `npm test -- packages/core/test/application.test.ts` (7 tests); `npm run typecheck`; `npm run verify`; due scheduling, skip-on-overlap, common reset, stale refresh, atomic state/diagnostics, exact exception state, and successful recovery validated. |
+| 2026-08-31 | 17 | complete | Focused AGG/Device/Asset/Datastream/Application tests (25 tests); `npm run verify`; one trailing timer per parent, latest-state reads, changed-only updates, dirty-during-run follow-up, synchronous recompute, shutdown flush, and child propagation validated. |
+| 2026-08-31 | 18 | complete | `npm test -- packages/core/test/engine.test.ts packages/core/test/plugins.test.ts packages/core/test/configuration-validator.test.ts` (18 tests); `npm run typecheck`; `npm run verify`; ordered qualified graph construction, atomic preflight failures, isolated Engine buses/state/timers, and frozen registry views validated. |
+| 2026-08-31 | 19 | complete | `npm test -- packages/core/test/snapshots.test.ts` (6 tests); `npm run verify`; frozen serializable entity/family/all views, event-source selection, relationship references, complete diagnostic groups, dotted projections, missing-path reporting, and atomic strict failures validated. |
+| 2026-08-31 | 20 | complete | `npm test -- packages/core/test/snapshot-persistence.test.ts` (4 tests); `npm run typecheck`; `npm run verify`; versioned plain snapshots, entity/condition restoration, empty-store defaults, post-construction obsolete-key cleanup, and readiness exclusion validated. |
+| 2026-08-31 | 21 | complete | `npm test -- packages/core/test/state-migrations.test.ts` (6 tests); `npm run typecheck`; `npm run verify`; sequential schema and Application plugin-state migrations, corrupt-input preservation with clean diagnostic fallback, and surfaced load/save failures validated. |
+| 2026-08-31 | 22 | complete | `npm test -- packages/core/test/engine-lifecycle.test.ts` (6 tests); focused lifecycle/diagnostic compatibility suites (22 tests); `npm run verify`; false-before-true startup, runtime sessions, replay, ready event pairing, failed startup, and health-independent readiness validated. |
+| 2026-08-31 | 23 | complete | `npm test -- packages/core/test/datastream-stale-scheduler.test.ts` (4 tests); Engine timer-isolation suite; `npm run verify`; bounded earliest-due scans, mapped/unmapped independence, per-task failure isolation with retry throttling, rescheduling, and timer cleanup validated. |
+| 2026-08-31 | 24 | complete | `npm test -- packages/core/test/application-scheduler.test.ts` (4 tests); both scheduler suites (8 tests); `npm run verify`; overdue single execution, no historical replay, awaited task isolation, deterministic overlap skip/retry, independent scheduling, and timer cleanup validated. |
+| 2026-08-31 | 25 | complete | `npm test -- packages/core/test/clock-jump-reset.test.ts` (6 tests); focused clock/timer suites (10 tests); `npm run verify`; wall/monotonic comparison, configured/derived horizons, reset-time ingestion gating, Engine namespace deletion, default rebuild, persistence-before-ready, fresh sessions, scheduler restart, and failed reset state validated. |
+| 2026-08-31 | 26 | complete | `npm test -- packages/core/test/engine-shutdown.test.ts` (3 tests); reset/shutdown regression suites (9 tests); `npm run verify` (106 tests); immediate readiness gating, scheduler and active-work draining, parent flush, final persistence, timer/listener cleanup, and idempotent close validated. |
+| 2026-08-31 | 27 | complete | `npm test -- packages/device-enless-twin-temp/test/enless-twin-temperature.test.ts` (7 tests); core Device/Datastream regression suite (10 tests); `npm run verify` (113 tests); stable manifest/schema/defaults, atomic sensor-type/payload validation, normalized source timestamps, per-stream range faults, `SENSOR_BROKEN` reconciliation, and recovery validated. |
+| 2026-08-31 | 28 | complete | `npm test -- packages/app-twin-temp-failed-closed/test/twin-temperature-failed-closed.test.ts` (7 tests); focused Application/Datastream suites (18 tests); `npm run verify` (120 tests); stable manifest/schema/defaults, stale-aware grace, inclusive averages, Off/On and process states, error branches, transactional state, and scoped diagnostic reconciliation validated. |
+| 2026-08-31 | 29 | complete | `npm test -- packages/deployment-ug65-example/test/ug65-example-profile.test.ts` (3 tests); `npm run verify` (123 tests); explicit two-plugin registry, packaged example JSON validation, complete Engine graph construction, and pre-ready rejection of unavailable plugin types validated. |
+| 2026-08-31 | 30 | complete | Node-RED 3.0.2 and `node-red-node-test-helper` 0.3.6 installed for tests; `npm test -- packages/node-red/test/node-discovery.test.ts`; `npm run verify` (124 tests); built-entry require check; four metadata-declared runtime/editor entry points and helper-based node discovery validated. |
+| 2026-08-31 | 31 | complete | `npm test -- packages/node-red/test/industrial-engine.test.ts` (5 tests); `npm run verify` (129 tests); explicit profile-registry composition, one exposed Engine, lifecycle status, configuration failure, selected/missing context stores, and awaited single-callback shutdown validated. |
+| 2026-08-31 | 32 | complete | Focused UG6x Input and Engine envelope suites (11 tests); `npm run verify` (140 tests); top-level identity/time normalization, raw payload preservation, Engine-owned diagnostics/rejection, readiness reject/queue including reset replay, statuses, and completion semantics validated. |
+| 2026-08-31 | 33 | complete | `npm test -- packages/node-red/test/engine-message-receiver.test.ts` (5 tests); `npm run verify` (145 tests); exact/wildcard one-output filtering, detached serializable envelopes, independent subscriptions, immediate lifecycle replay, and idempotent listener/timer cleanup validated. |
+| 2026-08-31 | 34 | complete | `npm test -- packages/node-red/test/engine-message-receiver.test.ts` (9 tests); `npm run verify` (149 tests); immediate ordered lifecycle/diagnostic delivery, latest-per-type/source coalescing, 100 ms trailing/500 ms maximum delay, source isolation, and close-time timer cleanup validated. |
+| 2026-08-31 | 35 | complete | `npm test -- packages/node-red/test/engine-state-snapshot.test.ts` (9 tests); `npm run verify` (158 tests); message preservation, configured/dynamic request precedence, event-source/entity/family/all targets, missing-path and strict atomic behavior, invalid-request failure, and ready-triggered initialization snapshots validated. |
+| 2026-08-31 | 36 | complete | `npm test -- packages/deployment-ug65-example/test/end-to-end-smoke.test.ts` (5 tests); `npm run verify` (163 tests); cold readiness/initialization, valid full-graph flow, hardware/stale/calculation/execution fault recovery, restart restoration/session isolation, clock-reset gate/reinitialization, and shutdown validated. |
+| 2026-08-31 | 37 | complete | Five `npm pack` archives inspected with build caches excluded; clean Docker Node 18.20.8/npm 6.14.9 install resolved all local artifacts plus Node-RED 3.0.2; `packed-runtime-smoke.cjs` started Node-RED, discovered exactly four nodes, and ran the compiled five-entity flow; `npm run verify` (163 tests). Pinned Node-RED dependency warnings deferred to step 38 review. |
+| 2026-08-31 | 38 | complete | `npm run verify` (163 tests); all 133 behavioral IDs and four PACK procedures accounted for; production audit 0 vulnerabilities, pinned Node-RED 3.0.2 development tree 31 documented findings; dependency/license review documented; packed Node 18 benchmark measured startup, throughput, CPU, memory, and event-loop delay; README operations/rollback updated. No publish or deploy performed; target-UG65 measurement remains a documented deployment gate. |

@@ -1,0 +1,28 @@
+<script type="text/javascript">
+  RED.nodes.registerType('industrial-engine', {
+    category: 'config',
+    defaults: {
+      name: { value: '' },
+      contextStore: { value: 'ieps', required: true },
+      configuration: { value: '', required: true },
+    },
+    label: function () {
+      return this.name || 'Industrial Engine';
+    },
+  });
+</script>
+
+<script type="text/html" data-template-name="industrial-engine">
+  <div class="form-row">
+    <label for="node-config-input-name">Name</label>
+    <input type="text" id="node-config-input-name" />
+  </div>
+  <div class="form-row">
+    <label for="node-config-input-contextStore">Context store</label>
+    <input type="text" id="node-config-input-contextStore" />
+  </div>
+  <div class="form-row">
+    <label for="node-config-input-configuration">Configuration</label>
+    <textarea id="node-config-input-configuration" rows="16"></textarea>
+  </div>
+</script>

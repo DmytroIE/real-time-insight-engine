@@ -1,0 +1,18 @@
+{
+  "name": "@sxs/industrial-core",
+  "version": "0.1.0",
+  "description": "Framework-independent real-time insight engine",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=18"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "!dist/.tsbuildinfo"
+  ],
+  "dependencies": {
+    "ajv": "^8.20.0"
+  }
+}

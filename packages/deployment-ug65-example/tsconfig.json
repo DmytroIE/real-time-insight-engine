@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/.tsbuildinfo"
+  },
+  "references": [
+    { "path": "../core" },
+    { "path": "../node-red" },
+    { "path": "../device-enless-twin-temp" },
+    { "path": "../app-twin-temp-failed-closed" }
+  ],
+  "include": ["src/**/*.ts"]
+}

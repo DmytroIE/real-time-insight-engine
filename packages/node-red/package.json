@@ -1,0 +1,27 @@
+{
+  "name": "node-red-contrib-sxs-industrial",
+  "version": "0.1.0",
+  "description": "Node-RED adapters for the real-time insight engine",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=18"
+  },
+  "main": "dist/index.js",
+  "node-red": {
+    "version": ">=3.0.2",
+    "nodes": {
+      "industrial-engine": "nodes/industrial-engine.js",
+      "ug6x-input": "nodes/ug6x-input.js",
+      "engine-message-receiver": "nodes/engine-message-receiver.js",
+      "engine-state-snapshot": "nodes/engine-state-snapshot.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/.tsbuildinfo",
+    "nodes"
+  ],
+  "dependencies": {
+    "@sxs/industrial-core": "0.1.0"
+  }
+}

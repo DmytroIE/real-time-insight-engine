@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "incremental": false,
+    "noEmit": true,
+    "paths": {
+      "@sxs/app-twin-temp-failed-closed": ["packages/app-twin-temp-failed-closed/src/index.ts"],
+      "@sxs/device-enless-twin-temp": ["packages/device-enless-twin-temp/src/index.ts"],
+      "@sxs/industrial-core": ["packages/core/src/index.ts"],
+      "node-red-contrib-sxs-industrial": ["packages/node-red/src/index.ts"]
+    }
+  },
+  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts"]
+}

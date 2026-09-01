@@ -1,0 +1,100 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { describe, expect, it } from 'vitest';
+
+import {
+  ConfigurationBuilder,
+  ConfigurationValidationError,
+  Engine,
+  asPluginTypeId,
+  type Clock,
+  type TimerCallback,
+  type TimerScheduler,
+} from '@sxs/industrial-core';
+import { TWIN_TEMPERATURE_FAILED_CLOSED_TYPE } from '@sxs/app-twin-temp-failed-closed';
+import { ENLESS_TWIN_TEMPERATURE_TYPE } from '@sxs/device-enless-twin-temp';
+
+import { createUg65ExamplePluginRegistry } from '../src';
+
+class TestClock implements Clock {
+  public wallTimeMs(): number {
+    return 1_000;
+  }
+
+  public monotonicTimeMs(): number {
+    return 0;
+  }
+}
+
+class TestTimers implements TimerScheduler {
+  public setTimeout(callback: TimerCallback, delayMs: number): unknown {
+    void callback;
+    void delayMs;
+    return {};
+  }
+
+  public clearTimeout(handle: unknown): void {
+    void handle;
+  }
+}
+
+const loadExample = (): unknown =>
+  JSON.parse(readFileSync(join(__dirname, '..', 'settings.example.json'), 'utf8')) as unknown;
+
+describe('PROFILE-01 explicit plugin selection', () => {
+  it('registers only the selected Device and Application plugins', () => {
+    const registry = createUg65ExamplePluginRegistry();
+
+    expect(registry.resolveDevice(ENLESS_TWIN_TEMPERATURE_TYPE).type).toBe(
+      ENLESS_TWIN_TEMPERATURE_TYPE,
+    );
+    expect(registry.resolveApplication(TWIN_TEMPERATURE_FAILED_CLOSED_TYPE).type).toBe(
+      TWIN_TEMPERATURE_FAILED_CLOSED_TYPE,
+    );
+    expect(() => registry.resolve(asPluginTypeId('sxs.unselected'))).toThrow(
+      'Plugin type is not installed: sxs.unselected',
+    );
+  });
+});
+
+describe('PROFILE-02 validated example configuration', () => {
+  it('validates the JSON and constructs the complete Engine graph', () => {
+    const registry = createUg65ExamplePluginRegistry();
+    const configuration = new ConfigurationBuilder(registry).build(loadExample());
+
+    const engine = new Engine(configuration, {
+      clock: new TestClock(),
+      timers: new TestTimers(),
+      plugins: registry,
+    });
+
+    expect(engine.isReady).toBe(true);
+    expect(engine.registry()).toEqual({
+      devices: ['enless-twin-temp-1'],
+      datastreams: ['enless-twin-temp-1/temp1', 'enless-twin-temp-1/temp2'],
+      assets: ['steam-trap-1'],
+      applications: ['steam-trap-1/failed-closed'],
+    });
+  });
+});
+
+describe('PROFILE-03 unavailable plugin type', () => {
+  it('rejects an unregistered type during configuration validation', () => {
+    const raw = loadExample() as {
+      devices: Record<string, { type: string }>;
+    };
+    const device = raw.devices['enless-twin-temp-1'];
+    if (device === undefined) {
+      throw new Error('Example Device is missing');
+    }
+    device.type = 'sxs.unavailable-device';
+
+    expect(() => new ConfigurationBuilder(createUg65ExamplePluginRegistry()).build(raw)).toThrow(
+      ConfigurationValidationError,
+    );
+    expect(() => new ConfigurationBuilder(createUg65ExamplePluginRegistry()).build(raw)).toThrow(
+      'Plugin type is not installed: sxs.unavailable-device',
+    );
+  });
+});
