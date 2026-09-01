@@ -1,3 +1,12 @@
 'use strict';
 
-module.exports = require('../dist/industrial-engine.js').registerIndustrialEngineNode;
+const {
+	createIndustrialPluginRegistry,
+	registerIndustrialEngineNode,
+} = require('../dist/index.js');
+
+module.exports = (RED) => {
+	registerIndustrialEngineNode(RED, {
+		createPluginRegistry: createIndustrialPluginRegistry,
+	});
+};

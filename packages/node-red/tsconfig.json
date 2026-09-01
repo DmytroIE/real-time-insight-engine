@@ -5,6 +5,10 @@
     "outDir": "dist",
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
-  "references": [{ "path": "../core" }],
+  "references": [
+    { "path": "../core" },
+    { "path": "../device-enless-twin-temp" },
+    { "path": "../app-twin-temp-failed-closed" }
+  ],
   "include": ["src/**/*.ts"]
 }

@@ -1,19 +1,36 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 
+import { TWIN_TEMPERATURE_FAILED_CLOSED_TYPE } from '@sxs/app-twin-temp-failed-closed';
+import { ENLESS_TWIN_TEMPERATURE_TYPE } from '@sxs/device-enless-twin-temp';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import helper from 'node-red-node-test-helper';
 
-import { registerEngineMessageReceiverNode } from '../src/engine-message-receiver';
-import { registerEngineStateSnapshotNode } from '../src/engine-state-snapshot';
-import { registerIndustrialEngineNode } from '../src/industrial-engine';
+import { createIndustrialPluginRegistry } from '../src/plugin-registry';
 import {
   ENGINE_CONFIG_NODE_TYPE,
   ENGINE_MESSAGE_RECEIVER_NODE_TYPE,
   ENGINE_STATE_SNAPSHOT_NODE_TYPE,
   UG6X_INPUT_NODE_TYPE,
 } from '../src/node-types';
-import { registerUg6xInputNode } from '../src/ug6x-input';
+
+type PackagedNodeInitializer = Extract<
+  Parameters<typeof helper.load>[0],
+  (...arguments_: never[]) => unknown
+>;
+
+const requireFromTest = createRequire(__filename);
+const registerIndustrialEngineNode = requireFromTest(
+  '../nodes/industrial-engine.js',
+) as PackagedNodeInitializer;
+const registerUg6xInputNode = requireFromTest('../nodes/ug6x-input.js') as PackagedNodeInitializer;
+const registerEngineMessageReceiverNode = requireFromTest(
+  '../nodes/engine-message-receiver.js',
+) as PackagedNodeInitializer;
+const registerEngineStateSnapshotNode = requireFromTest(
+  '../nodes/engine-state-snapshot.js',
+) as PackagedNodeInitializer;
 
 interface NodeRedPackageManifest {
   readonly 'node-red'?: {
@@ -89,5 +106,13 @@ describe('NR-01 Node-RED package discovery', () => {
     expect(helper.getNode('input')).toBeDefined();
     expect(helper.getNode('receiver')).toBeDefined();
     expect(helper.getNode('snapshot')).toBeDefined();
+
+    const plugins = createIndustrialPluginRegistry();
+    expect(plugins.resolveDevice(ENLESS_TWIN_TEMPERATURE_TYPE).type).toBe(
+      ENLESS_TWIN_TEMPERATURE_TYPE,
+    );
+    expect(plugins.resolveApplication(TWIN_TEMPERATURE_FAILED_CLOSED_TYPE).type).toBe(
+      TWIN_TEMPERATURE_FAILED_CLOSED_TYPE,
+    );
   });
 });

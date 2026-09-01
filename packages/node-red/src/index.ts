@@ -1,3 +1,4 @@
+export { createIndustrialPluginRegistry } from './plugin-registry';
 export {
   ENGINE_CONFIG_NODE_TYPE,
   ENGINE_MESSAGE_RECEIVER_NODE_TYPE,

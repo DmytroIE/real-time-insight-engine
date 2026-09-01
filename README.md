@@ -45,12 +45,22 @@ Run the complete local verification suite with `npm run verify`.
 
 ### Install
 
-Build and pack artifacts on a development or CI machine. Install the selected versioned `.tgz` files from `/etc/node_red/data` with npm 6.14.9; do not copy source files into `node_modules` or compile TypeScript on the gateway. Restart Node-RED and confirm that these four node types are available:
+Build the single Palette artifact on an internet-connected development or CI machine:
+
+```text
+npm install
+npm run verify
+npm run pack:palette
+```
+
+This creates `artifacts/node-red-contrib-sxs-industrial-0.1.0.tgz`. In Node-RED, open **Manage palette**, select **Install**, choose **Upload module tgz**, and upload that file. The archive includes the core and selected Device/Application plugins as bundled npm dependencies, so no other project archives or `settings.js` plugin-registry hook are required. Restart Node-RED and confirm that these four node types are available:
 
 - `industrial-engine`
 - `ug6x-input`
 - `engine-message-receiver`
 - `engine-state-snapshot`
+
+The Palette still uses npm normally. Public dependencies can be resolved from the configured registry, while the current archive also carries its complete tested runtime dependency tree. Do not copy source files into `node_modules` or compile TypeScript on the gateway.
 
 Before upgrading, back up `/etc/node_red/data/flows.json`, its package manifests and lockfile, and persistent Engine state. Retain the previously tested artifacts and checksums for rollback.
 
@@ -92,7 +102,7 @@ Stop or disable incoming work, restore the prior `flows.json`, package manifests
 
 ## Release review
 
-- `npm run verify` covers 133 behavioral acceptance IDs with 163 tests. PACK-01 through PACK-04 are procedural checks: archive inspection, clean npm 6 installation, Node-RED 3.0.2 discovery, and compiled Node 18 smoke execution.
+- `npm run verify` covers 134 behavioral acceptance IDs with 163 tests. PACK-01 through PACK-05 include procedural checks for archive inspection, clean npm 6 installation, Node-RED 3.0.2 discovery, compiled Node 18 smoke execution, and the single Palette artifact.
 - `npm audit --omit=dev` reports zero production vulnerabilities.
 - The full development-tree audit reports 31 findings (6 low, 6 moderate, 15 high, 4 critical) under the exact Node-RED 3.0.2 compatibility dependency. The suggested forced remediation upgrades Node-RED to 3.1.15, so these findings are accepted for the pinned test/runtime target and must be reassessed before exposing the Node-RED editor or HTTP endpoints to untrusted networks.
 - Installed dependency license declarations are permissive (MIT, ISC, Apache, BSD, and similar), except the five project packages are intentionally `UNLICENSED` and seven transitive packages omit a license field in their installed metadata. Complete legal/license review before external distribution.

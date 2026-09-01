@@ -171,3 +171,4 @@ This catalog defines the minimum observable behavior for `IMPLEMENTATION_PLAN.md
 - **PACK-02:** A clean npm 6.14.9 installation resolves the selected packed profile and runtime dependencies without workspace support.
 - **PACK-03:** Node-RED 3.0.2 starts with the packed artifacts and discovers exactly the four documented node types.
 - **PACK-04:** The installed artifacts pass the end-to-end smoke flow on Node.js 18 without source compilation.
+- **PACK-05:** One Palette-uploadable Node-RED archive contains the selected private packages, installs without separate project artifacts, and exposes the built-in Device/Application registry.

@@ -22,6 +22,13 @@
     "nodes"
   ],
   "dependencies": {
+    "@sxs/app-twin-temp-failed-closed": "0.1.0",
+    "@sxs/device-enless-twin-temp": "0.1.0",
     "@sxs/industrial-core": "0.1.0"
-  }
+  },
+  "bundleDependencies": [
+    "@sxs/app-twin-temp-failed-closed",
+    "@sxs/device-enless-twin-temp",
+    "@sxs/industrial-core"
+  ]
 }
