@@ -7,16 +7,23 @@ export interface ParentRecomputationRequester {
 }
 
 export class ParentRecomputationController implements ParentRecomputationRequester {
+  readonly #timers: TimerScheduler;
+  readonly #recompute: () => void;
+  readonly #delayMs: number;
   #timer: unknown;
   #dirty = false;
   #running = false;
   #closed = false;
 
   public constructor(
-    private readonly timers: TimerScheduler,
-    private readonly recompute: () => void,
-    private readonly delayMs = DEFAULT_PARENT_RECOMPUTATION_DELAY_MS,
-  ) {}
+    timers: TimerScheduler,
+    recompute: () => void,
+    delayMs = DEFAULT_PARENT_RECOMPUTATION_DELAY_MS,
+  ) {
+    this.#timers = timers;
+    this.#recompute = recompute;
+    this.#delayMs = delayMs;
+  }
 
   public requestRecompute(): void {
     if (this.#closed) {
@@ -52,20 +59,20 @@ export class ParentRecomputationController implements ParentRecomputationRequest
   }
 
   private schedule(): void {
-    this.#timer = this.timers.setTimeout(() => {
+    this.#timer = this.#timers.setTimeout(() => {
       this.#timer = undefined;
       if (this.#closed || !this.#dirty) {
         return;
       }
       this.#dirty = false;
       this.run();
-    }, this.delayMs);
+    }, this.#delayMs);
   }
 
   private run(): void {
     this.#running = true;
     try {
-      this.recompute();
+      this.#recompute();
     } finally {
       this.#running = false;
       if (!this.#closed && this.#dirty && this.#timer === undefined) {
@@ -78,7 +85,7 @@ export class ParentRecomputationController implements ParentRecomputationRequest
     if (this.#timer === undefined) {
       return;
     }
-    this.timers.clearTimeout(this.#timer);
+    this.#timers.clearTimeout(this.#timer);
     this.#timer = undefined;
   }
 }

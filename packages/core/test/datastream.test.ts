@@ -3,12 +3,15 @@ import { describe, expect, it } from 'vitest';
 import {
   Datastream,
   DiagnosticRegistry,
+  EntityKind,
   InMemoryEventBus,
   asDatastreamId,
   asEngineId,
+  type Diagnostic,
   type EngineEvent,
   type ParentRecomputationRequester,
   type PersistenceMarker,
+  type RestoredDatastreamState,
 } from '../src';
 import { FakeClock } from './support/fake-clock';
 
@@ -28,12 +31,15 @@ class FakeParentRequester implements ParentRecomputationRequester {
   }
 }
 
-const setup = () => {
+const setup = (
+  restored: RestoredDatastreamState = {},
+  restoredDiagnostics: readonly Diagnostic[] = [],
+) => {
   const clock = new FakeClock(1_000, 0);
   const eventBus = new InMemoryEventBus();
   const events: EngineEvent[] = [];
   eventBus.subscribe('*', (event) => events.push(event));
-  const diagnostics = new DiagnosticRegistry(clock, eventBus);
+  const diagnostics = new DiagnosticRegistry(clock, eventBus, restoredDiagnostics);
   const persistence = new FakePersistenceMarker();
   const parent = new FakeParentRequester();
   const datastream = new Datastream(
@@ -49,7 +55,7 @@ const setup = () => {
     eventBus,
     diagnostics,
     persistence,
-    {},
+    restored,
     parent,
   );
   return { clock, datastream, diagnostics, events, parent, persistence };
@@ -99,7 +105,7 @@ describe('DS-06 invalid input', () => {
 });
 
 describe('DS-07 startup grace and interval margin', () => {
-  it('marks an empty buffer stale only at the margin-adjusted due time', () => {
+  it('marks an empty buffer stale no earlier than the grace period', () => {
     const { clock, datastream } = setup();
 
     clock.advanceWallBy(149);
@@ -107,15 +113,56 @@ describe('DS-07 startup grace and interval margin', () => {
     expect(datastream.state().noDataError).toBe(false);
 
     clock.advanceWallBy(1);
+    expect(datastream.evaluateStale()).toBe(false);
+    expect(datastream.state().noDataError).toBe(false);
+
+    clock.advanceWallBy(150);
     expect(datastream.evaluateStale()).toBe(true);
     expect(datastream.state().noDataError).toBe(true);
+  });
+
+  it('retains a restored no-data condition during the new session grace period', () => {
+    const restoredDiagnostic: Diagnostic = {
+      category: 'Datastream',
+      sourceId: 'device-1/temperature',
+      ownerScope: 'datastream-stale',
+      code: 'NO_DATA',
+      severity: 'error',
+      message: 'Datastream has no current data',
+      retention: 'condition',
+      source: {
+        engineId: asEngineId('engine-1'),
+        entityType: EntityKind.Datastream,
+        entityId: asDatastreamId('device-1/temperature'),
+      },
+      firstRaisedTs: 800,
+      lastUpdatedTs: 800,
+      lastObservedTs: 900,
+      occurrenceCount: 1,
+    };
+    const { clock, datastream, diagnostics, events } = setup({ noDataError: true }, [
+      restoredDiagnostic,
+    ]);
+
+    clock.advanceWallBy(150);
+
+    expect(datastream.evaluateStale()).toBe(true);
+    expect(datastream.state().noDataError).toBe(true);
+    expect(diagnostics.records()).toEqual([expect.objectContaining({ code: 'NO_DATA' })]);
+    expect(events).not.toContainEqual(expect.objectContaining({ type: 'diagnostic.cleared' }));
+  });
+
+  it('derives a restored deadline from the active configured interval', () => {
+    const { datastream } = setup({ lastUpdateTimestamp: 900, nextUpdateTimestamp: 9_000 });
+
+    expect(datastream.nextStaleCheckTimestamp()).toBe(1_050);
   });
 });
 
 describe('DS-08 fresh data recovery', () => {
   it('clears no-data and hardware diagnostics when fresh data arrives', () => {
     const { clock, datastream, diagnostics, events } = setup();
-    clock.advanceWallBy(150);
+    clock.advanceWallBy(300);
     datastream.evaluateStale();
     datastream.rejectInput('Invalid input');
     clock.advanceWallBy(10);
@@ -131,7 +178,7 @@ describe('DS-08 fresh data recovery', () => {
 describe('DS-09 independent stale evaluation', () => {
   it('becomes stale through an explicit check without input or Application access', () => {
     const { clock, datastream, diagnostics, persistence } = setup();
-    clock.advanceWallBy(150);
+    clock.advanceWallBy(300);
 
     expect(datastream.evaluateStale()).toBe(true);
 

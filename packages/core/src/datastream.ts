@@ -11,6 +11,7 @@ import type { ParentRecomputationRequester } from './parent-recomputation';
 import type { Clock } from './time';
 
 export const DEFAULT_INTERVAL_MARGIN_COEFFICIENT = 1.5;
+export const DEFAULT_GRACE_PERIOD_COEFFICIENT = 2;
 
 export interface PersistenceMarker {
   markDirty(): void;
@@ -18,11 +19,13 @@ export interface PersistenceMarker {
 
 export interface DatastreamOptions {
   readonly id: DatastreamId;
+  readonly name?: string;
   readonly engineId: EngineId;
   readonly pluginType?: PluginTypeId;
   readonly maxBufferLength: number;
   readonly maxBufferAgeMs: number;
   readonly expectedIntervalMs: number;
+  readonly gracePeriodCoefficient?: number;
   readonly sessionStartTimestamp: number;
   readonly intervalMarginCoefficient?: number;
 }
@@ -46,34 +49,55 @@ export interface RestoredDatastreamState {
 export class Datastream {
   readonly #source: EntityEventSource;
   readonly #staleAfterMs: number;
+  readonly #gracePeriodMs: number;
   readonly #values: DatastreamValueBuffer;
+  readonly #options: DatastreamOptions;
+  readonly #clock: Clock;
+  readonly #eventSink: EventSink;
+  readonly #diagnostics: DiagnosticRegistry;
+  readonly #persistence: PersistenceMarker;
+  readonly #parent: ParentRecomputationRequester | undefined;
   #lastUpdateTimestamp: number;
   #nextUpdateTimestamp: number;
   #noDataError: boolean;
   #hwError: boolean;
 
   public get id(): DatastreamId {
-    return this.options.id;
+    return this.#options.id;
+  }
+
+  public get name(): string {
+    return this.#options.name ?? this.#options.id;
   }
 
   public constructor(
-    private readonly options: DatastreamOptions,
-    private readonly clock: Clock,
-    private readonly eventSink: EventSink,
-    private readonly diagnostics: DiagnosticRegistry,
-    private readonly persistence: PersistenceMarker,
+    options: DatastreamOptions,
+    clock: Clock,
+    eventSink: EventSink,
+    diagnostics: DiagnosticRegistry,
+    persistence: PersistenceMarker,
     restored: RestoredDatastreamState = {},
-    private readonly parent?: ParentRecomputationRequester,
+    parent?: ParentRecomputationRequester,
   ) {
+    this.#options = options;
+    this.#clock = clock;
+    this.#eventSink = eventSink;
+    this.#diagnostics = diagnostics;
+    this.#persistence = persistence;
+    this.#parent = parent;
     this.#source = {
       engineId: options.engineId,
       entityType: EntityKind.Datastream,
       entityId: options.id,
+      ...(options.name === undefined ? {} : { entityName: options.name }),
       ...(options.pluginType === undefined ? {} : { pluginType: options.pluginType }),
     };
     this.#staleAfterMs =
       options.expectedIntervalMs *
       (options.intervalMarginCoefficient ?? DEFAULT_INTERVAL_MARGIN_COEFFICIENT);
+    this.#gracePeriodMs =
+      options.expectedIntervalMs *
+      (options.gracePeriodCoefficient ?? DEFAULT_GRACE_PERIOD_COEFFICIENT);
     this.#values = new DatastreamValueBuffer(
       {
         maxBufferLength: options.maxBufferLength,
@@ -81,16 +105,14 @@ export class Datastream {
       },
       restored.samples,
     );
-    this.#lastUpdateTimestamp = restored.lastUpdateTimestamp ?? 0;
-    this.#nextUpdateTimestamp =
-      restored.nextUpdateTimestamp ??
-      Math.max(options.sessionStartTimestamp, this.#lastUpdateTimestamp) + this.#staleAfterMs;
+    this.#lastUpdateTimestamp = restored.lastUpdateTimestamp ?? options.sessionStartTimestamp;
+    this.#nextUpdateTimestamp = this.#lastUpdateTimestamp + this.#staleAfterMs;
     this.#noDataError = restored.noDataError ?? false;
     this.#hwError = restored.hwError ?? false;
   }
 
   public acceptSample(sample: DatastreamSample): void {
-    const now = this.clock.wallTimeMs();
+    const now = this.#clock.wallTimeMs();
     this.#values.upsert(sample, now);
     this.#hwError = false;
     this.#noDataError = false;
@@ -104,10 +126,10 @@ export class Datastream {
     details?: Readonly<Record<string, unknown>>,
     code = 'INVALID_INPUT',
   ): void {
-    const now = this.clock.wallTimeMs();
+    const now = this.#clock.wallTimeMs();
     this.#values.prune(now);
     this.#hwError = true;
-    const scope = this.diagnostics.createScope(this.scopeIdentity('datastream-input'));
+    const scope = this.#diagnostics.createScope(this.scopeIdentity('datastream-input'));
     scope.report({
       code,
       severity: 'error',
@@ -120,21 +142,27 @@ export class Datastream {
   }
 
   public evaluateStale(): boolean {
-    const now = this.clock.wallTimeMs();
+    const now = this.#clock.wallTimeMs();
     if (now < this.#nextUpdateTimestamp) {
       return this.#noDataError;
     }
 
     this.#values.prune(now);
-    const stale = this.#values.values().length === 0;
-    this.#noDataError = stale;
+    const wasNoDataError = this.#noDataError;
+    this.#noDataError =
+      this.#values.values().length === 0 &&
+      (now - this.#options.sessionStartTimestamp >= this.#gracePeriodMs || wasNoDataError);
     this.reconcileStale();
     this.commitUpdate(now);
-    return stale;
+    return this.#noDataError;
   }
 
   public nextStaleCheckTimestamp(): number {
     return this.#nextUpdateTimestamp;
+  }
+
+  public get hasError(): boolean {
+    return this.#hwError || this.#noDataError;
   }
 
   public state(): DatastreamState {
@@ -162,19 +190,19 @@ export class Datastream {
   private commitUpdate(now: number): void {
     this.#lastUpdateTimestamp = now;
     this.#nextUpdateTimestamp = now + this.#staleAfterMs;
-    this.persistence.markDirty();
-    this.eventSink.publish({ type: 'entity.updated', timestamp: now, source: this.#source });
-    this.parent?.requestRecompute();
+    this.#persistence.markDirty();
+    this.#eventSink.publish({ type: 'entity.updated', timestamp: now, source: this.#source });
+    this.#parent?.requestRecompute();
   }
 
   private reconcileHardware(): void {
     if (!this.#hwError) {
-      this.diagnostics.createScope(this.scopeIdentity('datastream-input')).complete();
+      this.#diagnostics.createScope(this.scopeIdentity('datastream-input')).complete();
     }
   }
 
   private reconcileStale(): void {
-    const scope = this.diagnostics.createScope(this.scopeIdentity('datastream-stale'));
+    const scope = this.#diagnostics.createScope(this.scopeIdentity('datastream-stale'));
     if (this.#noDataError) {
       scope.report({
         code: 'NO_DATA',
@@ -188,7 +216,7 @@ export class Datastream {
   private scopeIdentity(ownerScope: string): DiagnosticScopeIdentity {
     return {
       category: 'Datastream',
-      sourceId: this.options.id,
+      sourceId: this.#options.id,
       ownerScope,
       source: this.#source,
     };

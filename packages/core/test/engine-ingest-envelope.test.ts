@@ -8,6 +8,7 @@ import {
   asPluginTypeId,
   type DevicePlugin,
   type EngineConfiguration,
+  type EngineEvent,
 } from '../src';
 import { FakeClock } from './support/fake-clock';
 import { FakeTimerScheduler } from './support/fake-timer-scheduler';
@@ -40,62 +41,85 @@ const createEngine = (): Engine => {
 };
 
 describe('normalized Engine ingestion envelope', () => {
-  it('owns known-Device time diagnostics and clears them on a valid envelope', async () => {
+  it('rejects malformed payloads through an Engine-owned diagnostic and clears it on valid input', async () => {
     const engine = createEngine();
+    parse.mockClear();
+    const events: EngineEvent[] = [];
+    engine.subscribe('diagnostic.*', (event) => events.push(event));
 
     await engine.ingest({
-      deviceId: asDeviceId('device-1'),
+      deviceName: 'device-1',
       rawPayload: { value: 1 },
-      sourceTimestamp: 2_000,
-      receivedTimestamp: 2_000,
-      source: 'ug6x',
-      issues: ['NO_GATEWAY_TIME'],
+      source: 'engine-input',
+      issues: ['INVALID_TIMESTAMP'],
     });
 
-    expect(engine.snapshot({ target: { scope: 'all' } }).diagnostics?.Device).toMatchObject([
-      { sourceId: 'device-1', ownerScope: 'ingest-envelope', code: 'NO_GATEWAY_TIME' },
-    ]);
+    expect(parse).not.toHaveBeenCalled();
+    expect(
+      engine.snapshot({ target: { scope: 'all' } }).diagnostics.common['engine-1'],
+    ).toContainEqual(
+      expect.objectContaining({
+        sourceId: 'engine-1',
+        ownerScope: 'engine-ingest',
+        code: 'INVALID_INGEST_ENVELOPE',
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'diagnostic.raised',
+        data: expect.objectContaining({ code: 'INVALID_INGEST_ENVELOPE' }),
+      }),
+    );
 
     await engine.ingest({
-      deviceId: asDeviceId('device-1'),
+      deviceName: 'device-1',
       rawPayload: { value: 2 },
-      sourceTimestamp: 2_100,
-      receivedTimestamp: 2_100,
-      source: 'ug6x',
+      timestamp: 2_100,
+      source: 'engine-input',
       issues: [],
     });
 
-    expect(engine.snapshot({ target: { scope: 'all' } }).diagnostics?.Device).toEqual([]);
+    expect(parse).toHaveBeenCalledWith(
+      { value: 2 },
+      expect.objectContaining({ sourceTimestamp: 2_100, receivedTimestamp: 2_000 }),
+    );
+    expect(
+      engine.snapshot({ target: { scope: 'all' } }).diagnostics.common['engine-1'] ?? [],
+    ).not.toContainEqual(
+      expect.objectContaining({
+        sourceId: 'engine-1',
+        ownerScope: 'engine-ingest',
+        code: 'INVALID_INGEST_ENVELOPE',
+      }),
+    );
   });
 
   it.each([
-    ['missing', undefined, ['NO_DEVICE_NAME'] as const],
-    ['unknown', asDeviceId('missing-device'), [] as const],
-  ])(
-    'reports %s Devices as Common diagnostics without parsing',
-    async (_case, deviceId, issues) => {
-      const engine = createEngine();
-      parse.mockClear();
+    ['missing', undefined],
+    ['unknown', asDeviceId('missing-device')],
+  ])('reports %s Devices as Common diagnostics without parsing', async (_case, deviceId) => {
+    const engine = createEngine();
+    parse.mockClear();
 
-      await expect(
-        engine.ingest({
-          ...(deviceId === undefined ? {} : { deviceId }),
-          rawPayload: {},
-          sourceTimestamp: 2_000,
-          receivedTimestamp: 2_000,
-          source: 'ug6x',
-          issues,
-        }),
-      ).resolves.toBe(false);
+    await expect(
+      engine.ingest({
+        ...(deviceId === undefined ? {} : { deviceId }),
+        rawPayload: {},
+        timestamp: 2_000,
+        source: 'engine-input',
+        issues: [],
+      }),
+    ).resolves.toBe(false);
 
-      expect(parse).not.toHaveBeenCalled();
-      expect(engine.snapshot({ target: { scope: 'all' } }).diagnostics?.Common).toContainEqual(
-        expect.objectContaining({
-          sourceId: 'engine-1',
-          ownerScope: 'engine-ingest',
-          code: 'DEVICE_NOT_RECOGNIZED',
-        }),
-      );
-    },
-  );
+    expect(parse).not.toHaveBeenCalled();
+    expect(
+      engine.snapshot({ target: { scope: 'all' } }).diagnostics.common['engine-1'],
+    ).toContainEqual(
+      expect.objectContaining({
+        sourceId: 'engine-1',
+        ownerScope: 'engine-ingest',
+        code: deviceId === undefined ? 'INVALID_INGEST_ENVELOPE' : 'DEVICE_NOT_RECOGNIZED',
+      }),
+    );
+  });
 });

@@ -117,6 +117,50 @@ describe('ENG-01 Engine object graph', () => {
       applications: ['asset-1/application-1'],
     });
   });
+
+  it('derives safe IDs while retaining descriptive configured names', () => {
+    const base = configuration();
+    const device = base.devices['device-1'];
+    const application = base.assets['asset-1']?.applications[0];
+    if (device === undefined || application === undefined) {
+      throw new Error('Missing test configuration');
+    }
+    const config: EngineConfiguration = {
+      ...base,
+      devices: { 'Diag kit TX2 19297/2': device },
+      assets: {
+        'Steam Trap 1': {
+          applications: [
+            {
+              ...application,
+              id: 'Twin Temp Failed Closed',
+              datafeeds: {
+                temperature: { device: 'Diag kit TX2 19297/2', datastream: 'temperature' },
+              },
+            },
+          ],
+        },
+      },
+    };
+
+    const engine = createEngine(config);
+
+    expect(engine.registry()).toEqual({
+      devices: ['Diag%20kit%20TX2%2019297%2F2'],
+      datastreams: ['Diag%20kit%20TX2%2019297%2F2/temperature'],
+      assets: ['Steam%20Trap%201'],
+      applications: ['Steam%20Trap%201/Twin%20Temp%20Failed%20Closed'],
+    });
+    const entities = engine.snapshot({ target: { scope: 'all' } }).entities;
+    expect(entities.device['Diag%20kit%20TX2%2019297%2F2']).toMatchObject({
+      entityType: 'device',
+      entityName: 'Diag kit TX2 19297/2',
+    });
+    expect(entities.application['Steam%20Trap%201/Twin%20Temp%20Failed%20Closed']).toMatchObject({
+      entityType: 'application',
+      entityName: 'Twin Temp Failed Closed',
+    });
+  });
 });
 
 describe('ENG-02 atomic graph validation', () => {

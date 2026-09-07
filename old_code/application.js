@@ -57,8 +57,8 @@ class Application {
         this.state = state; // state can be used to store any persistent data between runs
 
         // this items are in every app state
-        this.state.lastRunTs = this.state.lastRunTs ?? 0;
-        this.state.nextRunTs = this.state.lastRunTs + this.runInterval;
+        this.state.lastUpdTs = this.state.lastUpdTs ?? 0;
+        this.state.nextUpdTs = this.state.lastUpdTs + this.runInterval;
         this.state.currState = this.state.currState ?? 0; // 0: Undefined, 1: OK, 2: Warning, 3: Error
         this.state.noDataError = this.state.noDataError ?? false;
         this.state.appError = this.state.appError ?? false;
@@ -71,6 +71,10 @@ class Application {
         Application.instanceMap[this.id] = this;
         this.parent.addApplication(this);
 
+    }
+
+    get hasError() {
+        return this.state.appError || this.state.noDataError;
     }
 
     /**
@@ -92,14 +96,14 @@ class Application {
     run() {
         const nowTs = Date.now();
         // Throttle (check if the interval has elapsed)
-        if (nowTs < this.state.nextRunTs) {
+        if (nowTs < this.state.nextUpdTs) {
             //console.log("Throttled");
             return;
         }
 
         // updtate the last and next run timestamps before executing the application logic
-        this.state.lastRunTs = nowTs;
-        this.state.nextRunTs = nowTs + this.runInterval;
+        this.state.lastUpdTs = nowTs;
+        this.state.nextUpdTs = nowTs + this.runInterval;
 
         // reset all the common values in the state
         this.state.currState = 0;
@@ -117,7 +121,9 @@ class Application {
                 {
                     instance: this,
                     timestamp: nowTs,
-                    payload: { "Error executing application": null }
+                    payload: {
+                        "Error executing application": { level: null }
+                    }
                 });
         } catch (error) {
             // 3. Common Error Handling / Logging
@@ -132,7 +138,6 @@ class Application {
         }
         eventBus.emit("updated", { instance: this, timestamp: nowTs });
         this.parent.update();
-        console.log("Application state after execution:", JSON.stringify(this.state, null, 2));
     }
 
     /**
@@ -152,13 +157,13 @@ class Application {
      * @param {number} maxNum - The maximum number of applications to return
      * @returns {Application[]}
      */
-    static getAppsWithSmallestNextRunTs(nowTs, maxNum = 3) {
+    static getAppsWithSmallestNextUpdTs(nowTs, maxNum = 3) {
         const instances = Object.values(Application.instanceMap);
         if (instances.length === 0) return [];
-        const appsDueForRun = instances.filter(app => app.state.nextRunTs <= nowTs);
-        if (appsDueForRun.length === 0) return [];
-        appsDueForRun.sort((a, b) => a.state.nextRunTs - b.state.nextRunTs);
-        return appsDueForRun.slice(0, maxNum);
+        const appsDueForUpdate = instances.filter(app => app.state.nextUpdTs <= nowTs);
+        if (appsDueForUpdate.length === 0) return [];
+        appsDueForUpdate.sort((a, b) => a.state.nextUpdTs - b.state.nextUpdTs);
+        return appsDueForUpdate.slice(0, maxNum);
     }
 }
 

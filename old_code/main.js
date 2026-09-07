@@ -205,7 +205,7 @@ try {
         const { instance, timestamp, payload } = logEvent;
 
         for (const [key, value] of Object.entries(payload)) {
-            if (value !== null) {
+            if (value !== null && value.level !== null) {
                 console.log(`[${instance.id}] - [${new Date(timestamp).toISOString()}] - [${value.level}] - [${key}]\n`, JSON.stringify(value.meta, null, 2));
             }
         }
@@ -230,7 +230,7 @@ console.log("Initial setup completed successfully.");
 setInterval(() => {
     const payload = {
         deviceName: "Device 1",
-        time: new Date().toISOString(),
+        gatewayTime: new Date().toISOString(),
         object: {}
     }
     payload.object.temp1 = Math.random() / 2 * 1000;

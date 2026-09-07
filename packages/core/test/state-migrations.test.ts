@@ -101,7 +101,7 @@ const dependencies = (store: StateStore, plugins = createPlugins()) => ({
 const persistedSnapshot = (): PersistedEngineSnapshot => ({
   schemaVersion: ENGINE_SNAPSHOT_SCHEMA_VERSION,
   entityStates: {
-    devices: { 'device-1': { lastUpdateTimestamp: 0, hwError: false, error: false } },
+    devices: { 'device-1': { lastUpdateTimestamp: 0, hwError: false } },
     datastreams: {
       'device-1/temperature': {
         lastUpdateTimestamp: 0,
@@ -112,7 +112,7 @@ const persistedSnapshot = (): PersistedEngineSnapshot => ({
       },
     },
     assets: {
-      'asset-1': { lastUpdateTimestamp: 0, currState: ProcessState.Undefined, error: false },
+      'asset-1': { lastUpdateTimestamp: 0, currState: ProcessState.Undefined },
     },
     applications: {
       'asset-1/application-1': {
@@ -152,11 +152,11 @@ describe('STATE-06 deterministic migrations', () => {
     expect(
       engine.snapshot({
         target: {
-          scope: 'entity',
+          scope: 'entities',
           entityType: EntityKind.Application,
           entityId: 'asset-1/application-1',
         },
-      }).entities[0]?.state,
+      }).entities.application['asset-1/application-1']?.state,
     ).toMatchObject({ pluginState: { runs: 4 } });
   });
 
@@ -169,11 +169,11 @@ describe('STATE-06 deterministic migrations', () => {
     expect(
       engine.snapshot({
         target: {
-          scope: 'entity',
+          scope: 'entities',
           entityType: EntityKind.Application,
           entityId: 'asset-1/application-1',
         },
-      }).entities[0]?.state,
+      }).entities.application['asset-1/application-1']?.state,
     ).toMatchObject({ pluginState: { runs: 4, migrated: true } });
     await expect(
       store.load<PersistedEngineSnapshot>(engineSnapshotKey(asEngineId('engine-1'))),
@@ -192,8 +192,10 @@ describe('STATE-07 corrupt-state recovery', () => {
     const engine = await Engine.create(configuration(), dependencies(store));
     const snapshot = engine.snapshot({ target: { scope: 'all' } });
 
-    expect(snapshot.entities).toHaveLength(4);
-    expect(snapshot.diagnostics?.Common).toEqual(
+    expect(Object.values(snapshot.entities).flatMap((group) => Object.values(group))).toHaveLength(
+      4,
+    );
+    expect(snapshot.diagnostics.common['engine-1']).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ code: PERSISTED_STATE_RECOVERY_DIAGNOSTIC }),
       ]),
@@ -215,11 +217,11 @@ describe('STATE-07 corrupt-state recovery', () => {
     expect(
       engine.snapshot({
         target: {
-          scope: 'entity',
+          scope: 'entities',
           entityType: EntityKind.Application,
           entityId: 'asset-1/application-1',
         },
-      }).entities[0]?.state,
+      }).entities.application['asset-1/application-1']?.state,
     ).toMatchObject({ pluginState: { runs: 0 } });
   });
 });

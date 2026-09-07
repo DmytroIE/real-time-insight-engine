@@ -16,11 +16,13 @@ export interface AssetApplicationState {
 
 export interface AssetApplication {
   readonly id: ApplicationId;
+  readonly hasError: boolean;
   state(): AssetApplicationState;
 }
 
 export interface AssetOptions {
   readonly id: AssetId;
+  readonly name?: string;
   readonly engineId: EngineId;
   readonly parentRecomputationDelayMs?: number;
 }
@@ -28,39 +30,45 @@ export interface AssetOptions {
 export interface AssetState {
   readonly lastUpdateTimestamp: number;
   readonly currState: ProcessState;
-  readonly error: boolean;
 }
 
 export interface RestoredAssetState {
   readonly lastUpdateTimestamp?: number;
   readonly currState?: ProcessState;
-  readonly error?: boolean;
 }
 
 export class Asset implements ParentRecomputationRequester {
   readonly #source: EntityEventSource;
   readonly #applications = new Map<ApplicationId, AssetApplication>();
   readonly #recomputation: ParentRecomputationController;
+  readonly #options: AssetOptions;
+  readonly #clock: Clock;
+  readonly #eventSink: EventSink;
+  readonly #persistence: PersistenceMarker;
   #lastUpdateTimestamp: number;
   #currState: ProcessState;
-  #error: boolean;
+  #lastChildError = false;
 
   public constructor(
-    private readonly options: AssetOptions,
-    private readonly clock: Clock,
-    private readonly eventSink: EventSink,
-    private readonly persistence: PersistenceMarker,
+    options: AssetOptions,
+    clock: Clock,
+    eventSink: EventSink,
+    persistence: PersistenceMarker,
     timers: TimerScheduler,
     restored: RestoredAssetState = {},
   ) {
+    this.#options = options;
+    this.#clock = clock;
+    this.#eventSink = eventSink;
+    this.#persistence = persistence;
     this.#source = {
       engineId: options.engineId,
       entityType: EntityKind.Asset,
       entityId: options.id,
+      ...(options.name === undefined ? {} : { entityName: options.name }),
     };
     this.#lastUpdateTimestamp = restored.lastUpdateTimestamp ?? 0;
     this.#currState = restored.currState ?? ProcessState.Undefined;
-    this.#error = restored.error ?? false;
     this.#recomputation = new ParentRecomputationController(
       timers,
       () => this.recomputeState(),
@@ -70,13 +78,17 @@ export class Asset implements ParentRecomputationRequester {
 
   public registerApplication(application: AssetApplication): void {
     if (this.#applications.has(application.id)) {
-      throw new Error(`Duplicate Application ID for Asset ${this.options.id}: ${application.id}`);
+      throw new Error(`Duplicate Application ID for Asset ${this.#options.id}: ${application.id}`);
     }
     this.#applications.set(application.id, application);
   }
 
   public application(id: ApplicationId): AssetApplication | undefined {
     return this.#applications.get(id);
+  }
+
+  public get name(): string {
+    return this.#options.name ?? this.#options.id;
   }
 
   public recompute(): AssetState {
@@ -88,6 +100,14 @@ export class Asset implements ParentRecomputationRequester {
     this.#recomputation.requestRecompute();
   }
 
+  public get chldError(): boolean {
+    return [...this.#applications.values()].some((application) => application.hasError);
+  }
+
+  public get hasError(): boolean {
+    return this.chldError;
+  }
+
   public close(): AssetState {
     this.#recomputation.flushAndClose();
     return this.state();
@@ -97,27 +117,25 @@ export class Asset implements ParentRecomputationRequester {
     return {
       lastUpdateTimestamp: this.#lastUpdateTimestamp,
       currState: this.#currState,
-      error: this.#error,
     };
   }
 
   private recomputeState(): void {
     let currState = ProcessState.Undefined;
-    let error = false;
     for (const application of this.#applications.values()) {
       const childState = application.state();
       currState = Math.max(currState, childState.currState) as ProcessState;
-      error ||= childState.noDataError || childState.appError;
     }
+    const childError = this.chldError;
 
-    if (this.#currState === currState && this.#error === error) {
+    if (this.#currState === currState && this.#lastChildError === childError) {
       return;
     }
     this.#currState = currState;
-    this.#error = error;
-    this.#lastUpdateTimestamp = this.clock.wallTimeMs();
-    this.persistence.markDirty();
-    this.eventSink.publish({
+    this.#lastChildError = childError;
+    this.#lastUpdateTimestamp = this.#clock.wallTimeMs();
+    this.#persistence.markDirty();
+    this.#eventSink.publish({
       type: 'entity.updated',
       timestamp: this.#lastUpdateTimestamp,
       source: this.#source,

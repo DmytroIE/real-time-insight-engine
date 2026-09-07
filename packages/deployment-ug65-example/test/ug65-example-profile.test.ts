@@ -7,6 +7,7 @@ import {
   ConfigurationBuilder,
   ConfigurationValidationError,
   Engine,
+  asEngineId,
   asPluginTypeId,
   type Clock,
   type TimerCallback,
@@ -61,7 +62,10 @@ describe('PROFILE-01 explicit plugin selection', () => {
 describe('PROFILE-02 validated example configuration', () => {
   it('validates the JSON and constructs the complete Engine graph', () => {
     const registry = createUg65ExamplePluginRegistry();
-    const configuration = new ConfigurationBuilder(registry).build(loadExample());
+    const configuration = new ConfigurationBuilder(registry).build(
+      loadExample(),
+      asEngineId('ug65-example'),
+    );
 
     const engine = new Engine(configuration, {
       clock: new TestClock(),
@@ -75,6 +79,21 @@ describe('PROFILE-02 validated example configuration', () => {
       datastreams: ['enless-twin-temp-1/temp1', 'enless-twin-temp-1/temp2'],
       assets: ['steam-trap-1'],
       applications: ['steam-trap-1/failed-closed'],
+    });
+    expect(configuration.devices['enless-twin-temp-1']?.settings).toEqual({
+      numFaultyValues: 3,
+    });
+    expect(configuration.devices['enless-twin-temp-1']?.datastreams?.temp1).toEqual({
+      maxBufferLength: 5,
+      maxBufferAgeMs: 1_800_000,
+      expectedIntervalMs: 600_000,
+      gracePeriodCoefficient: 2,
+    });
+    expect(configuration.assets['steam-trap-1']?.applications[0]?.settings).toEqual({
+      tempDiffMargin: 0.5,
+      offThreshold: 80,
+      tempDiffThreshold: 30,
+      windowSizeMs: 1_800_000,
     });
   });
 });
@@ -90,11 +109,17 @@ describe('PROFILE-03 unavailable plugin type', () => {
     }
     device.type = 'sxs.unavailable-device';
 
-    expect(() => new ConfigurationBuilder(createUg65ExamplePluginRegistry()).build(raw)).toThrow(
-      ConfigurationValidationError,
-    );
-    expect(() => new ConfigurationBuilder(createUg65ExamplePluginRegistry()).build(raw)).toThrow(
-      'Plugin type is not installed: sxs.unavailable-device',
-    );
+    expect(() =>
+      new ConfigurationBuilder(createUg65ExamplePluginRegistry()).build(
+        raw,
+        asEngineId('ug65-example'),
+      ),
+    ).toThrow(ConfigurationValidationError);
+    expect(() =>
+      new ConfigurationBuilder(createUg65ExamplePluginRegistry()).build(
+        raw,
+        asEngineId('ug65-example'),
+      ),
+    ).toThrow('Plugin type is not installed: sxs.unavailable-device');
   });
 });

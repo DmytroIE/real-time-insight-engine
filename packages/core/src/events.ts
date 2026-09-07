@@ -12,6 +12,7 @@ export interface EngineEventSource {
 export interface EntityEventSource extends EngineEventSource {
   readonly entityType: EntityKind;
   readonly entityId: EntityId;
+  readonly entityName?: string;
   readonly pluginType?: PluginTypeId;
 }
 

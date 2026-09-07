@@ -54,10 +54,24 @@ const configuration: EngineConfiguration = {
   assets: {},
 };
 
-const createEngine = (): Engine => {
+const createEngine = (numFaultyValues = 3): Engine => {
   const plugins = new PluginRegistry();
   plugins.register(enlessTwinTemperatureDevicePlugin);
-  return new Engine(configuration, {
+  const device = configuration.devices['device-1'];
+  if (device === undefined) {
+    throw new Error('Missing Enless test Device configuration');
+  }
+  const configured: EngineConfiguration = {
+    ...configuration,
+    devices: {
+      ...configuration.devices,
+      'device-1': {
+        ...device,
+        settings: { numFaultyValues },
+      },
+    },
+  };
+  return new Engine(configured, {
     clock: new TestClock(),
     timers: new TestTimers(),
     plugins,
@@ -71,15 +85,17 @@ const ingest = (
 ): Promise<boolean> =>
   engine.ingest({
     deviceId: asDeviceId('device-1'),
-    rawPayload: { object },
-    sourceTimestamp,
-    receivedTimestamp: 2_000,
+    rawPayload: object,
+    timestamp: sourceTimestamp,
   });
 
 const datastreamState = (engine: Engine, id: 'device-1/temp1' | 'device-1/temp2') =>
   engine.snapshot({
-    target: { scope: 'entity', entityType: EntityKind.Datastream, entityId: id },
-  }).entities[0]?.state;
+    target: { scope: 'entities', entityType: EntityKind.Datastream, entityId: id },
+  }).entities.datastream[id]?.state;
+
+const diagnosticsFor = (engine: Engine, type: 'device' | 'datastream') =>
+  Object.values(engine.snapshot({ target: { scope: 'all' } }).diagnostics[type]).flat();
 
 describe('PLUG-DEV-01 Enless manifest', () => {
   it('exposes a stable type, strict settings schema, defaults, and both Datastreams', () => {
@@ -89,8 +105,12 @@ describe('PLUG-DEV-01 Enless manifest', () => {
       version: 1,
       displayName: 'Enless Twin Temperature',
       datastreams: ENLESS_TWIN_TEMPERATURE_DATASTREAMS,
-      settingsSchema: { type: 'object', additionalProperties: false },
-      defaultSettings: {},
+      settingsSchema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['numFaultyValues'],
+      },
+      defaultSettings: { numFaultyValues: 3 },
     });
   });
 });
@@ -115,9 +135,18 @@ describe('PLUG-DEV-02 valid payload', () => {
 });
 
 describe('PLUG-DEV-03 and PLUG-DEV-04 range faults', () => {
-  it('reports and later clears SENSOR_BROKEN without inserting the invalid value', async () => {
+  it('reports only after three consecutive invalid values and clears on recovery', async () => {
     const engine = createEngine();
 
+    await expect(ingest(engine, { sensorType: 12, temp1: 401, temp2: 20 })).resolves.toBe(true);
+
+    expect(datastreamState(engine, 'device-1/temp1')).toMatchObject({
+      hwError: false,
+      samples: [],
+    });
+    expect(diagnosticsFor(engine, 'datastream')).toEqual([]);
+
+    await expect(ingest(engine, { sensorType: 12, temp1: 401, temp2: 20 })).resolves.toBe(true);
     await expect(ingest(engine, { sensorType: 12, temp1: 401, temp2: 20 })).resolves.toBe(true);
 
     expect(datastreamState(engine, 'device-1/temp1')).toMatchObject({ hwError: true, samples: [] });
@@ -125,7 +154,7 @@ describe('PLUG-DEV-03 and PLUG-DEV-04 range faults', () => {
       hwError: false,
       samples: [{ timestamp: 1_500, value: 20 }],
     });
-    expect(engine.snapshot({ target: { scope: 'all' } }).diagnostics?.Datastream).toMatchObject([
+    expect(diagnosticsFor(engine, 'datastream')).toMatchObject([
       {
         sourceId: 'device-1/temp1',
         ownerScope: 'datastream-input',
@@ -142,7 +171,17 @@ describe('PLUG-DEV-03 and PLUG-DEV-04 range faults', () => {
       hwError: false,
       samples: [{ timestamp: 1_600, value: -100 }],
     });
-    expect(engine.snapshot({ target: { scope: 'all' } }).diagnostics?.Datastream).toEqual([]);
+    expect(diagnosticsFor(engine, 'datastream')).toEqual([]);
+  });
+
+  it('uses the configured faulty-value threshold', async () => {
+    const engine = createEngine(2);
+
+    await ingest(engine, { sensorType: 12, temp1: 401, temp2: 20 });
+    expect(datastreamState(engine, 'device-1/temp1')).toMatchObject({ hwError: false });
+
+    await ingest(engine, { sensorType: 12, temp1: 401, temp2: 20 });
+    expect(datastreamState(engine, 'device-1/temp1')).toMatchObject({ hwError: true });
   });
 });
 
@@ -159,7 +198,7 @@ describe('PLUG-DEV-05 malformed payloads', () => {
 
     expect(datastreamState(engine, 'device-1/temp1')).toMatchObject({ samples: [] });
     expect(datastreamState(engine, 'device-1/temp2')).toMatchObject({ samples: [] });
-    expect(engine.snapshot({ target: { scope: 'all' } }).diagnostics?.Device).toMatchObject([
+    expect(diagnosticsFor(engine, 'device')).toMatchObject([
       { sourceId: 'device-1', ownerScope: 'device-payload', code: 'INVALID_PAYLOAD' },
     ]);
   });

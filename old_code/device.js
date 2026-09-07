@@ -53,11 +53,15 @@ class Device {
         this.dsMap = {};
 
         this.state = state; // state can be used to store any persistent data between runs
-        this.state.lastUpdateTs = this.state.lastUpdateTs ?? 0;
-        this.state.error = this.state.error ?? false;
+        this.state.lastUpdTs = this.state.lastUpdTs ?? 0;
+        this.state.chldError = this.state.chldError ?? false;
         this.state.hwError = this.state.hwError ?? false; // error that belongs to the device itself, not to any of its datastreams
 
         Device.instanceMap[this.id] = this;
+    }
+
+    get hasError() {
+        return this.state.hwError || this.state.chldError;
     }
 
     /**
@@ -89,7 +93,8 @@ class Device {
             {
                 instance: this,
                 timestamp: Date.now(),
-                payload: { "Invalid payload": null }
+                payload: {
+                    "Invalid payload": { level: null } }
             }
         );
         for (const [key, parseFunction] of Object.entries(this.constructor.parsePayloadRules)) {
@@ -103,19 +108,16 @@ class Device {
      * This method is called internally by the `update` method.
      */
     _update() {
-        // take the device's own error state into account first
-        this.state.error = this.state.hwError;
-
-        // if the device itself is not in error, check the datastreams for errors
-        if (!this.state.error) {
-            for (const ds of Object.values(this.dsMap)) {
-                if (ds.state.noDataError || ds.state.hwError) {
-                    this.state.error = true;
-                    break;
-                }
+        // check the datastreams for errors
+        this.state.chldError = false;
+        for (const ds of Object.values(this.dsMap)) {
+            if (ds.hasError) {
+                this.state.chldError = true;
+                break;
             }
         }
-        this.state.lastUpdateTs = Date.now();
+        
+        this.state.lastUpdTs = Date.now();
         const nowTs = Date.now();
         eventBus.emit('updated', { instance: this, timestamp: nowTs });
     }

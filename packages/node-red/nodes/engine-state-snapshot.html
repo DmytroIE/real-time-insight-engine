@@ -4,7 +4,7 @@
     color: '#8fb8a8',
     defaults: {
       name: { value: '' },
-      engine: { value: '', type: 'industrial-engine', required: true },
+      engine: { value: '', type: 'insight-engine', required: true },
       snapshotRequest: {
         value: '{\n  "target": { "scope": "all" }\n}',
         required: true,
@@ -31,4 +31,68 @@
     <label for="node-input-snapshotRequest">Request</label>
     <textarea id="node-input-snapshotRequest" rows="10" style="width: 70%"></textarea>
   </div>
+</script>
+
+<script type="text/x-red" data-help-name="engine-state-snapshot">
+    <p>Reads a serializable snapshot from an Insight Engine.</p>
+    <p>
+      The node keeps the input message, adds the result as <code>msg.snapshot</code>, and sends
+      it from its output. The configured <b>Request</b> is JSON.
+    </p>
+    <p>
+      When the incoming message has no <code>msg.snapshotRequest</code> property, the node uses
+      the configured Request. When the property is present, its value replaces the configured
+      Request completely. It can be a JSON string or a request object, and it must follow the
+      rules below. It is not merged with the configured Request.
+    </p>
+    <p><strong>Request</strong></p>
+    <p>Read every entity:</p>
+    <pre>{
+    "target": { "scope": "all" }
+  }</pre>
+    <p>Read one Device and its direct Datastreams:</p>
+    <pre>{
+    "target": {
+      "scope": "entities",
+      "entityType": "device",
+      "entityId": "Device%201"
+    },
+    "relations": "children"
+  }</pre>
+    <p>Read current diagnostics for one Datastream:</p>
+    <pre>{
+    "target": {
+      "scope": "diagnostics",
+      "entityType": "datastream",
+      "entityId": "Device%201/temp1"
+    }
+  }</pre>
+    <p>Read the entity that produced an incoming Engine event:</p>
+    <pre>{
+    "target": { "scope": "eventSource" },
+    "relations": "family",
+    "statePaths": ["currState", "hasError"]
+  }</pre>
+    <p><strong>Required fields</strong></p>
+    <ul>
+      <li>Every request needs <code>target</code>, with <code>target.scope</code> set to <code>all</code>, <code>entities</code>, <code>diagnostics</code>, or <code>eventSource</code>.</li>
+      <li><code>entities</code> optionally filters by <code>entityType</code> and then <code>entityId</code>. Entity type is <code>device</code>, <code>datastream</code>, <code>asset</code>, or <code>application</code>.</li>
+      <li><code>diagnostics</code> optionally filters by the same types plus <code>common</code>, and then by source <code>entityId</code>.</li>
+      <li>An <code>entityId</code> always requires an <code>entityType</code>.</li>
+      <li>For <code>target.scope: "eventSource"</code>, the input message must contain an Engine event with a valid <code>msg.event.source</code>.</li>
+      <li><code>relations</code>, <code>statePaths</code>, and <code>strictPaths</code> apply to entity views only. They are invalid for a <code>diagnostics</code> target.</li>
+    </ul>
+    <p>
+      <code>msg.snapshot.entities</code> is keyed first by entity type and then by runtime ID, for example
+      <code>entities.datastream["Device%201/temp1"]</code>. <code>msg.snapshot.diagnostics</code>
+      is keyed by lowercase category and then source ID, for example
+      <code>diagnostics.datastream["Device%201/temp1"]</code>. Every response includes all
+      entity and diagnostic group keys, even when a group is empty.
+    </p>
+    <p>
+      Without strict paths, missing fields are listed in <code>msg.snapshot.missingPaths</code>.
+      Invalid JSON, a missing or invalid target, invalid optional fields, an unknown entity, or a
+      missing event source calls the Node-RED error handler, sets a failed status, and sends no
+      message.
+    </p>
 </script>

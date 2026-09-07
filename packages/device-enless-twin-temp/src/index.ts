@@ -13,7 +13,9 @@ export const ENLESS_TWIN_TEMPERATURE_DATASTREAMS = ['temp1', 'temp2'] as const;
 export const ENLESS_TWIN_TEMPERATURE_MIN = -100;
 export const ENLESS_TWIN_TEMPERATURE_MAX = 400;
 
-export type EnlessTwinTemperatureSettings = Record<string, never>;
+export interface EnlessTwinTemperatureSettings {
+  readonly numFaultyValues: number;
+}
 
 interface EnlessTwinTemperaturePayload {
   readonly temp1: number;
@@ -23,20 +25,23 @@ interface EnlessTwinTemperaturePayload {
 const settingsSchema = {
   type: 'object',
   additionalProperties: false,
+  required: ['numFaultyValues'],
+  properties: {
+    numFaultyValues: { type: 'integer', minimum: 1 },
+  },
 } as const;
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const validatePayload = (payload: unknown): EnlessTwinTemperaturePayload | undefined => {
-  if (!isRecord(payload) || !isRecord(payload['object'])) {
+  if (!isRecord(payload)) {
     return undefined;
   }
-  const object = payload['object'];
-  const temp1 = object['temp1'];
-  const temp2 = object['temp2'];
+  const temp1 = payload['temp1'];
+  const temp2 = payload['temp2'];
   if (
-    object['sensorType'] !== ENLESS_TWIN_TEMPERATURE_SENSOR_TYPE ||
+    payload['sensorType'] !== ENLESS_TWIN_TEMPERATURE_SENSOR_TYPE ||
     typeof temp1 !== 'number' ||
     !Number.isFinite(temp1) ||
     typeof temp2 !== 'number' ||
@@ -47,8 +52,19 @@ const validatePayload = (payload: unknown): EnlessTwinTemperaturePayload | undef
   return { temp1, temp2 };
 };
 
-const applyValue = (datastream: DeviceDatastream, value: number, sourceTimestamp: number): void => {
+const applyValue = (
+  datastream: DeviceDatastream,
+  value: number,
+  sourceTimestamp: number,
+  numFaultyValues: number,
+  faultyValueCounts: Map<string, number>,
+): void => {
   if (value < ENLESS_TWIN_TEMPERATURE_MIN || value > ENLESS_TWIN_TEMPERATURE_MAX) {
+    const faultyValueCount = (faultyValueCounts.get(datastream.id) ?? 0) + 1;
+    faultyValueCounts.set(datastream.id, faultyValueCount);
+    if (faultyValueCount < numFaultyValues) {
+      return;
+    }
     datastream.rejectInput(
       'Sensor value is outside the supported temperature range',
       {
@@ -61,16 +77,25 @@ const applyValue = (datastream: DeviceDatastream, value: number, sourceTimestamp
     );
     return;
   }
+  faultyValueCounts.set(datastream.id, 0);
   datastream.acceptSample({ timestamp: sourceTimestamp, value });
 };
 
 class EnlessTwinTemperatureParser implements DevicePayloadParser {
+  readonly #faultyValueCounts = new Map<string, number>();
+  readonly #numFaultyValues: number;
+
+  public constructor(numFaultyValues: number) {
+    this.#numFaultyValues = numFaultyValues;
+  }
+
   public parse(payload: unknown, context: DevicePayloadContext): DevicePayloadParseResult {
     const values = validatePayload(payload);
     if (values === undefined) {
       return {
         accepted: false,
-        message: 'Expected Enless sensor type 12 with finite numeric temp1 and temp2 values',
+        message:
+          'Expected Enless sensor type 12 raw payload with finite numeric temp1 and temp2 values',
       };
     }
 
@@ -83,8 +108,20 @@ class EnlessTwinTemperatureParser implements DevicePayloadParser {
       };
     }
 
-    applyValue(temp1, values.temp1, context.sourceTimestamp);
-    applyValue(temp2, values.temp2, context.sourceTimestamp);
+    applyValue(
+      temp1,
+      values.temp1,
+      context.sourceTimestamp,
+      this.#numFaultyValues,
+      this.#faultyValueCounts,
+    );
+    applyValue(
+      temp2,
+      values.temp2,
+      context.sourceTimestamp,
+      this.#numFaultyValues,
+      this.#faultyValueCounts,
+    );
     return { accepted: true };
   }
 }
@@ -100,6 +137,6 @@ export const enlessTwinTemperatureDevicePlugin: DevicePlugin<
   displayName: 'Enless Twin Temperature',
   datastreams: ENLESS_TWIN_TEMPERATURE_DATASTREAMS,
   settingsSchema,
-  defaultSettings: {},
-  create: () => new EnlessTwinTemperatureParser(),
+  defaultSettings: { numFaultyValues: 3 },
+  create: ({ settings }) => new EnlessTwinTemperatureParser(settings.numFaultyValues),
 };

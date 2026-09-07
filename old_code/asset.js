@@ -24,10 +24,14 @@ class Asset {
 
         this.state = state; // state can be used to store any persistent data between runs
         this.state.currState = this.state.currState ?? 0;
-        this.state.error = this.state.error ?? false;
-        this.state.lastUpdateTs = this.state.lastUpdateTs ?? 0;
+        this.state.chldError = this.state.chldError ?? false;
+        this.state.lastUpdTs = this.state.lastUpdTs ?? 0;
 
         Asset.instanceMap[this.id] = this;
+    }
+
+    get hasError() {
+        return this.state.chldError;
     }
 
     /**
@@ -45,17 +49,17 @@ class Asset {
     _update() {
         // reset first the state values
         this.state.currState = 0;
-        this.state.error = false;
+        this.state.chldError = false;
 
         Object.values(this.appMap).forEach(app => {
             if (app.state.currState > this.state.currState) {
                 this.state.currState = app.state.currState;
             }
-            if (app.state.appError || app.state.noDataError) {
-                this.state.error = true;
+            if (app.hasError) {
+                this.state.chldError = true;
             }
         });
-        this.state.lastUpdateTs = Date.now();
+        this.state.lastUpdTs = Date.now();
         const nowTs = Date.now();
         eventBus.emit('updated', { instance: this, timestamp: nowTs });
     }

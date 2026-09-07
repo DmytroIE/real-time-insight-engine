@@ -24,6 +24,10 @@ class MutableApplication implements AssetApplication {
   public state(): AssetApplicationState {
     return { ...this.currentState };
   }
+
+  public get hasError(): boolean {
+    return this.currentState.noDataError || this.currentState.appError;
+  }
 }
 
 class FakePersistenceMarker implements PersistenceMarker {
@@ -61,11 +65,9 @@ describe('ASSET-01 empty Asset defaults', () => {
   it('starts Undefined without an error and with the default timestamp', () => {
     const { asset } = setup();
 
-    expect(asset.state()).toEqual({
-      lastUpdateTimestamp: 0,
-      currState: ProcessState.Undefined,
-      error: false,
-    });
+    expect(asset.state()).toEqual({ lastUpdateTimestamp: 0, currState: ProcessState.Undefined });
+    expect(asset.chldError).toBe(false);
+    expect(asset.hasError).toBe(false);
   });
 });
 
@@ -87,7 +89,6 @@ describe('ASSET-02 process-state aggregation', () => {
     expect(asset.recompute()).toEqual({
       lastUpdateTimestamp: 1_000,
       currState: ProcessState.Error,
-      error: false,
     });
     expect(persistence.dirtyCount).toBe(1);
     expect(events).toContainEqual(
@@ -110,19 +111,22 @@ describe('ASSET-03 Application error aggregation', () => {
     asset.registerApplication(first);
     asset.registerApplication(second);
 
-    expect(asset.recompute().error).toBe(true);
+    asset.recompute();
+    expect(asset.chldError).toBe(true);
+    expect(asset.hasError).toBe(true);
     first.currentState = applicationState(ProcessState.Ok);
     second.currentState = applicationState(ProcessState.Warning, false, true);
     clock.advanceWallBy(25);
-    expect(asset.recompute().error).toBe(true);
+    asset.recompute();
+    expect(asset.hasError).toBe(true);
     second.currentState = applicationState(ProcessState.Warning);
     clock.advanceWallBy(25);
 
     expect(asset.recompute()).toEqual({
       lastUpdateTimestamp: 1_050,
       currState: ProcessState.Warning,
-      error: false,
     });
+    expect(asset.hasError).toBe(false);
   });
 });
 
@@ -141,9 +145,11 @@ describe('AGG-01 and AGG-02 Asset recomputation', () => {
     asset.requestRecompute();
 
     expect(timers.pendingCount).toBe(1);
-    expect(asset.state()).toMatchObject({ currState: ProcessState.Undefined, error: false });
+    expect(asset.state()).toMatchObject({ currState: ProcessState.Undefined });
+    expect(asset.hasError).toBe(true);
     timers.runNext();
-    expect(asset.state()).toMatchObject({ currState: ProcessState.Error, error: true });
+    expect(asset.state()).toMatchObject({ currState: ProcessState.Error });
+    expect(asset.hasError).toBe(true);
     expect(persistence.dirtyCount).toBe(1);
     expect(events.filter((event) => event.type === 'entity.updated')).toHaveLength(1);
 

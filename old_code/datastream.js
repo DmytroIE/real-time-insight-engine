@@ -46,6 +46,10 @@ class Datastream {
         this.parent.addDatastream(this);
     }
 
+    get hasError() {
+        return this.state.hwError || this.state.noDataError;
+    }
+
     /**
      * Returns an array of values within the specified time range.
      * @param {number|null} timeStart 
@@ -115,7 +119,6 @@ class Datastream {
         const sessionStartTs = global.get("sessionStartTs") ?? 0;
         if (this.state.valBuffer.length == 0) {
             if (nowTs - sessionStartTs > this.updInterval * global.get("INTERVAL_MARGIN_COEFFICIENT")) {
-                console.log("-----!!!!-----\nIt is time to report empty buffer");
                 eventBus.emit(
                     "log",
                     {
@@ -133,7 +136,8 @@ class Datastream {
                 {
                     instance: this,
                     timestamp: nowTs,
-                    payload: { "Buffer empty": null }
+                    payload: {
+                        "Buffer empty": { level: null } }
                 }
             );
             this.state.noDataError = false;

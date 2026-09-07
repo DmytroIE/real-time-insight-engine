@@ -1,3 +1,4 @@
+import type { DatafeedReference } from './configuration';
 import type { ApplicationId, DeviceId, PluginTypeId } from './identifiers';
 
 export type JsonSchema = Readonly<Record<string, unknown>>;
@@ -35,7 +36,7 @@ export interface ApplicationPluginContext<Settings, State extends object> {
   readonly id: ApplicationId;
   readonly settings: Settings;
   readonly restoredState?: State;
-  readonly datafeeds: Readonly<Record<string, string>>;
+  readonly datafeeds: Readonly<Record<string, DatafeedReference | string>>;
 }
 
 export interface DevicePluginFactory<Settings, State, Instance> {

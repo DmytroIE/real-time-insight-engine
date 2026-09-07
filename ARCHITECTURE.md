@@ -31,8 +31,10 @@ Use three layers:
 
 ```mermaid
 flowchart LR
-  MQTT[MQTT in] --> IN[UG6x Input]
-  LORA[LoRa in] --> IN
+  MQTT[MQTT in] --> FN[Source Function]
+  LORA[LoRa in] --> FN
+  EG71[EG71 input] --> FN
+  FN --> IN[Engine Input]
     IN --> ENGINE[Engine config node]
     ENGINE --> DEVICE[Installed device plugins]
     DEVICE --> DS[Datastreams]
@@ -47,7 +49,7 @@ flowchart LR
 
 The domain library must not import Node-RED. The Node-RED package adapts messages, context, timers, and logging to the domain library. This makes the calculation code easy to test with a normal debugger and keeps Node-RED-specific concerns at the boundary.
 
-  The package is consumer-agnostic. Likely consumers include industrial protocols, dashboards, logging flows, and future integrations, but their mappings and payload formats are outside this package.
+The package is consumer-agnostic. Likely consumers include industrial protocols, dashboards, logging flows, and future integrations, but their mappings and payload formats are outside this package.
 
 ## 3. Package Layout
 
@@ -69,12 +71,12 @@ packages/
   node-red/
     src/
       engine-config.ts
-      ug6x-input-node.ts
+      engine-input-node.ts
       engine-message-receiver.ts
       engine-state-snapshot.ts
     nodes/
       engine-config.html
-      ug6x-input-node.html
+      engine-input-node.html
       engine-message-receiver.html
       engine-state-snapshot.html
   device-enless-twin-temp/
@@ -112,9 +114,9 @@ Each plugin package should export a manifest and a factory/class. A simplified c
 
 ```ts
 export interface ApplicationPlugin<TSettings, TState> {
-  kind: "application";
-  type: string;                    // Stable ID, e.g. "sxs.twin-temp-failed-closed"
-  version: number;                 // Configuration/state contract version
+  kind: 'application';
+  type: string; // Stable ID, e.g. "sxs.twin-temp-failed-closed"
+  version: number; // Configuration/state contract version
   displayName: string;
   requiredDatafeeds: readonly string[];
   settingsSchema: JsonSchema;
@@ -123,8 +125,8 @@ export interface ApplicationPlugin<TSettings, TState> {
 }
 
 export interface DevicePlugin<TSettings, TState> {
-  kind: "device";
-  type: string;                    // Stable ID, e.g. "sxs.enless-twin-temp"
+  kind: 'device';
+  type: string; // Stable ID, e.g. "sxs.enless-twin-temp"
   version: number;
   displayName: string;
   datastreams: readonly string[];
@@ -139,7 +141,7 @@ The Node-RED engine configuration stores stable type IDs as data; the profile re
 ```json
 {
   "devices": {
-    "device-1": {
+    "Diag kit TX2 19297/2": {
       "type": "sxs.enless-twin-temp",
       "datastreams": {
         "temp1": { "maxBufferLength": 6, "maxBufferAgeMs": 60000, "expectedIntervalMs": 10000 },
@@ -148,10 +150,9 @@ The Node-RED engine configuration stores stable type IDs as data; the profile re
     }
   },
   "assets": {
-    "trap-1": {
-      "applications": [
-        {
-          "id": "failed-closed",
+    "Steam Trap 1": {
+      "applications": {
+        "Twin Temp Failed Closed": {
           "type": "sxs.twin-temp-failed-closed",
           "runIntervalMs": 120000,
           "settings": {
@@ -161,17 +162,23 @@ The Node-RED engine configuration stores stable type IDs as data; the profile re
             "windowSizeMs": 180000
           },
           "datafeeds": {
-            "tempIn": "device-1/temp1",
-            "tempOut": "device-1/temp2"
+            "tempIn": { "device": "Diag kit TX2 19297/2", "datastream": "temp1" },
+            "tempOut": { "device": "Diag kit TX2 19297/2", "datastream": "temp2" }
           }
         }
-      ]
+      }
     }
   }
 }
 ```
 
 At startup, the profile registers its included manifests, and the engine constructs only the types selected in JSON. Fail startup on duplicate type IDs, unavailable types, incompatible versions, invalid settings, or unresolved datastream mappings.
+
+### Application defaults and Datastream onboarding
+
+The optional top-level `applicationDefaults` object is keyed by Application plugin type ID. Its `runIntervalMs` supplies the interval for that Application type when an instance does not set one. Its `settings` object may provide partial plugin settings, and its `datafeedDatastreams` object is keyed by the plugin's required datafeed names and may provide partial Datastream retention settings. The optional `deviceDefaults` object is keyed by Device plugin type ID; its `settings` object may provide partial plugin settings and its `datastreams` object may provide partial settings for the streams declared by that Device plugin. Use the nested `datastreams` object rather than stream names beside `settings`, so the configuration has a stable schema.
+
+Entity plugin settings merge in order: plugin manifest defaults, type defaults, then the concrete Device/Application `settings` object. For every Application datafeed mapping, the engine applies that type's datafeed defaults to the referenced Device Datastream. When several Applications target the same Datastream, their partial defaults aggregate deterministically: use the maximum `maxBufferLength`, maximum `maxBufferAgeMs`, minimum `expectedIntervalMs`, and maximum `gracePeriodCoefficient`. Device-type Datastream defaults merge first, application datafeed defaults override them by field, and explicit Device Datastream values merge last. Device-type defaults provision declared Datastreams even without an Application mapping. The optional positive `gracePeriodCoefficient` delays an empty-buffer `NO_DATA` alarm until no earlier than `expectedIntervalMs * gracePeriodCoefficient` after session start; the default is `2`. The final result must contain every required Datastream setting and is validated only after that merge.
 
 For security and predictable deployments:
 
@@ -192,6 +199,7 @@ Create a Node-RED configuration node similar in role to a shared connection conf
 Responsibilities:
 
 - parse and validate deployment configuration;
+- derive the Engine persistence identity from the immutable Node-RED config-node ID, not its editable Name or JSON configuration;
 - load registered plugins;
 - construct devices, datastreams, assets, and applications;
 - restore and periodically persist state;
@@ -202,46 +210,42 @@ Responsibilities:
 
 Avoid process-wide static `instanceMap` objects in the new core. Maps should belong to an `Engine` instance. Static maps leak instances across partial Node-RED redeploys and prevent two independent engines from running in one process.
 
-### UG6x Input node
+### Engine Input node
 
-This is the only gateway-specific node in the package. It receives messages from LoRaWAN and built-in UG65/UG67/EG71 inputs and references one engine config node.
+This transport-neutral node references one Engine config node. Source-specific Function or Change nodes transform LoRaWAN, EG71, and future device messages to its standard payload contract.
 
 Recommended properties:
 
 - engine;
-- `msg.deviceName` as the canonical device ID;
-- `msg.gatewayTime` as the canonical source timestamp;
-- behavior for unknown devices: warn/drop or send to an error output.
+- Engine config node;
+- behavior for input received while the Engine is not ready: reject or queue.
 
-For all Milesight sources, `msg.gatewayTime` is an ISO 8601 string such as `2026-08-21T15:19:25+02:00`. The node validates it, converts it once to Unix epoch milliseconds, constructs a normalized ingestion envelope, and calls the Engine's public API:
+The node accepts no source-specific top-level fields. It validates `msg.payload`, then constructs a normalized ingestion envelope and calls the Engine's public API:
 
 ```ts
-interface IngestEnvelope {
-  deviceId?: string;
-  sourceTs: number;
-  receivedTs: number;
-  source: "ug6x";
-  rawPayload: unknown;
-  issues: Array<"NO_DEVICE_NAME" | "NO_GATEWAY_TIME" | "INVALID_GATEWAY_TIME">;
+interface EngineInputPayload {
+  deviceName: string;
+  rawPayload: object;
+  timestamp: number;
 }
 ```
 
-All timestamps inside the engine, persisted state, and emitted events use Unix epoch milliseconds. The original source timestamp string may be retained as event metadata for diagnostics.
+`timestamp` is the upstream-normalized Unix epoch milliseconds at which the reading occurred and becomes the Datastream sample time. The Engine obtains its internal receipt time from its injected clock before it invokes the Device parser. Source transformation belongs in visible Node-RED Function or Change nodes, so device plugins receive only `rawPayload` and are independent of gateway message layout.
 
-Treat `deviceName` and `gatewayTime` as top-level fields with exactly those names. If `gatewayTime` is absent or cannot be parsed, use `receivedTs` as the sample timestamp and include the corresponding issue in the envelope.
+Missing or invalid `deviceName`, `rawPayload`, or `timestamp` are recorded as issues on the envelope. The Engine rejects the envelope before device parsing and raises the Common `INVALID_INGEST_ENVELOPE` diagnostic. The Engine Message Receiver can deliver that diagnostic through its normal `diagnostic.*` subscription. A valid configured name that does not identify a Device raises `DEVICE_NOT_RECOGNIZED` instead.
 
-The UG6x node handles only gateway-envelope validation and normalization. It does not know device plugin decoding rules and does not access the event bus directly. The Engine receives the envelope, performs registry lookup, raises/reconciles diagnostics, dispatches `rawPayload` to the configured device plugin, mutates state, and publishes resulting events. This keeps a single authority for event ordering, persistence, and diagnostic lifecycle.
+Engine Input has zero outputs. Its status reports whether input was accepted or rejected; diagnostics and entity transitions are observed through Engine Message Receiver. It does not know device plugin decoding rules and does not access the event bus directly. The Engine receives the envelope, performs registry lookup, raises/reconciles diagnostics, dispatches `rawPayload` to the configured Device plugin, mutates state, and publishes resulting events. This keeps a single authority for event ordering, persistence, and diagnostic lifecycle.
 
 Payload interpretation remains device-specific:
 
-- a LoRaWAN plugin can read decoded numeric datafeeds such as `msg.object.temp1` and handle sentinel values such as `3272.7` as hardware faults;
-- an EG71 universal-input plugin can recognize `msg.object.objectName` and obtain the value from the named top-level property, such as `msg["Present Value"]`.
+- an Enless LoRaWAN Function node can set `rawPayload` to `{ sensorType: 12, temp1, temp2 }`, which its plugin validates directly and can use to recognize hardware faults;
+- an EG71 universal-input Function node can choose a stable raw-payload shape for its plugin, rather than exposing its gateway-specific message fields to the Engine.
 
-This keeps LoRaWAN and built-in I/O decoding out of the adapter and the Engine core. The Engine is transport-agnostic: it understands the normalized envelope and plugin registry, while each plugin understands its device payload. Device names may be renamed by the gateway where Milesight supports it; the engine treats the incoming name as the configured lookup key.
+This keeps LoRaWAN and built-in I/O decoding out of the adapter and the Engine core. The Engine is transport-agnostic: it understands the normalized envelope and plugin registry, while each plugin understands its device payload. Device names may be renamed by the gateway where Milesight supports it; the Engine treats the normalized incoming name as the configured lookup key and converts it to a runtime ID only after lookup.
 
-If `deviceName` is absent or does not match a configured device, the Engine does not attempt plugin parsing. It raises or updates a Common diagnostic such as `DEVICE_NOT_RECOGNIZED` because no Device instance can own the condition. If the device is known but gateway time is missing or invalid, the Engine raises a Device diagnostic such as `NO_GATEWAY_TIME`; the next valid payload reconciles and clears it. Repeated malformed-input diagnostics should be rate-limited or summarized so a bad source cannot flood logs or flash storage.
+If the Device name is invalid or does not match a configured Device, the Engine does not attempt plugin parsing and raises a Common diagnostic because no Device instance can own the condition. Repeated malformed-input diagnostics should be rate-limited or summarized so a bad source cannot flood logs or flash storage.
 
-The node is justified even though common validation is small: it isolates Milesight-specific field names and future gateway quirks, provides Node-RED status/error behavior, and prevents those details from entering the reusable core. Use `node.status()` to show ready, last input, or configuration error states. Pass unexpected adapter failures to `done(error)`; rejected payloads are expected Engine diagnostics rather than JavaScript exceptions.
+The node is justified even though common validation is small: it gives every source one visible ingestion boundary, provides Node-RED status/error behavior, and prevents gateway quirks from entering the reusable core. Use `node.status()` to show ready, accepted input, or rejected input. Pass unexpected adapter failures to `done(error)`; rejected payloads are expected Engine diagnostics rather than JavaScript exceptions.
 
 ### Engine Message Receiver node
 
@@ -265,6 +269,7 @@ Use a stable, lightweight event envelope. The receiver converts the internal eve
       "engineId": "insight-engine-1",
       "entityType": "application",
       "entityId": "trap-1/failed-closed",
+      "entityName": "Twin Temp Failed Closed",
       "pluginType": "sxs.twin-temp-failed-closed"
     }
   }
@@ -297,16 +302,17 @@ For common fixed queries, the request can be configured directly in the node edi
 ```ts
 interface SnapshotRequest {
   target:
-    | { scope: "eventSource" }
-    | { scope: "entity"; entityType: EntityType; entityId: string }
-    | { scope: "all" };
-  relations?: "self" | "parent" | "children" | "family";
+    | { scope: 'eventSource' }
+    | { scope: 'entities'; entityType?: EntityType; entityId?: string }
+    | { scope: 'diagnostics'; entityType?: EntityType | 'common'; entityId?: string }
+    | { scope: 'all' };
+  relations?: 'self' | 'parent' | 'children' | 'family';
   statePaths?: string[]; // Omit for complete state.
   strictPaths?: boolean; // Default false.
 }
 ```
 
-`eventSource` resolves `msg.event.source`; `entity` performs an explicit lookup; `all` returns every Device, Datastream, Application, and Asset view. `family` includes the selected entity plus direct parent and children. The response contains identities, relationship references, plugin type, and either complete states or the requested state paths. Use simple validated dotted paths rather than executing arbitrary JSONata or JavaScript in the core.
+`eventSource` resolves `msg.event.source`; `entities` returns all entities or optionally filters by type and ID; `diagnostics` returns active diagnostics or optionally filters by category and source ID; `all` returns both every Device, Datastream, Application, and Asset view and every diagnostic category. An ID filter requires a type/category filter. `family` includes the selected entity plus direct parent and children. The response indexes entity views by lowercase entity type and runtime ID, for example `entities.datastream["Device%201/temp1"]`, and diagnostics by lowercase category and source ID, for example `diagnostics.datastream["Device%201/temp1"]`. Every group key is present even when empty. State projections and relations apply to entity views only; a diagnostics request rejects `relations`, `statePaths`, and `strictPaths`. Use simple validated dotted paths rather than executing arbitrary JSONata or JavaScript in the core.
 
 A requested state path absent from an otherwise valid entity is omitted from that entity's projected state and reported in `msg.snapshot.missingPaths`, including the entity reference and path. This is not the same as a missing plugin: a configured plugin type that is not registered fails Engine startup before readiness. With `strictPaths = true`, any missing path fails the Snapshot request through `done(error)` and produces no partial output; use strict mode for consumers whose contract requires every requested value.
 
@@ -338,7 +344,7 @@ The transition into `ready` additionally emits the convenient `engine.ready` eve
 
 A Gatekeeper flow may store `msg.event.data.ready` in memory-only flow or global context, keyed by Engine ID, and allow work only when the value is exactly `true`. `undefined` must be treated as `false`. Use flow context when all gated nodes are on one tab and global context when multiple tabs need the bit; do not persist this runtime flag in `ieps`, because a value restored as `true` after restart would be unsafe. The lifecycle receiver should listen to `engine.lifecycle`, not only `engine.ready`, so it observes both opening and closing transitions.
 
-UG6x Input does not need the global bit: because it references the Engine directly, it checks `isReady` at ingestion and queues or rejects input according to the configured startup policy. The context bit exists for unrelated Node-RED flows. Thus an ordinary Gatekeeper arrangement is:
+Engine Input does not need the global bit: because it references the Engine directly, it checks `isReady` at ingestion and queues or rejects input according to the configured startup policy. The context bit exists for unrelated Node-RED flows. Thus an ordinary Gatekeeper arrangement is:
 
 ```text
 Engine Message Receiver (engine.lifecycle)
@@ -359,6 +365,8 @@ The Engine exposes the same read-only snapshot service internally through method
 
 The best first editor is a JSON editor embedded in the config node's `.html` file using the editor facilities already shipped with Node-RED. JSON is preferable to JavaScript because it is serializable, validates consistently, can be diffed, and cannot execute code on the gateway.
 
+The Insight Engine editor provides a valid starter configuration with a fully specified Device/Application, a partial override example, and an example that derives settings from `applicationDefaults`. It is a starting point for the installed plugins, not deployment configuration. Every published Node-RED node provides concise built-in help through the Node-RED Help sidebar. The help documents the Engine Input payload contract, Receiver event patterns and delivery behavior, Snapshot request shape, and Engine configuration/defaults.
+
 Recommended editor behavior:
 
 - a large JSON editor for advanced configuration;
@@ -377,7 +385,15 @@ The configuration should be validated twice:
 
 JSON Schema with a validator such as Ajv is a good fit. Use one top-level schema for the engine and schemas supplied by plugins for their settings. Plugin defaults should be applied by the validator/config builder without mutating the raw Node-RED configuration object.
 
-Avoid allowing arbitrary JavaScript for settings. If a deployment needs message-dependent routing, expose a typed Node-RED property or let a Change/Function node prepare `msg` before the UG6x Input node. This keeps executable customization visible in the flow and keeps the engine configuration deterministic.
+Avoid allowing arbitrary JavaScript for settings. If a deployment needs source-specific normalization, let a Change/Function node prepare the standard `msg.payload` before Engine Input. This keeps executable customization visible in the flow and keeps the Engine configuration deterministic.
+
+### Identity and names
+
+The JSON configuration contains human-facing names, not runtime IDs. Device and Asset names are their object keys, Datastream names are keys beneath a Device, and Application names are keys beneath an Asset. Names may contain spaces, slashes, Unicode, and other descriptive characters, but must be nonempty. An Application still declares its stable plugin `type`, and each datafeed uses an explicit object with its configured Device and Datastream names rather than a delimiter-based string.
+
+The Engine deterministically converts each name path to a safe runtime ID by percent-encoding each path component independently. Thus a Device named `Diag kit TX2 19297/2` has a distinct safe ID, while `temp1` beneath it becomes a separately derived Datastream ID. Application IDs derive from Asset and Application names. Runtime IDs identify persistence, diagnostics, events, and snapshot relationships; snapshots and entity event sources also include the configured entity name for representation.
+
+In Node-RED, `config.id` is the Engine ID and namespaces its persisted state. The editable config-node Name never changes that identity. The deployment JSON contains no `engineId`; non-Node-RED hosts must supply a stable Engine ID to the configuration builder separately. Removing a Node-RED Engine config node deletes all state in that Engine ID's namespace after orderly shutdown. Recreating a node deliberately creates a distinct namespace.
 
 ## 7. Scheduling
 
@@ -397,10 +413,10 @@ Use a monotonic clock for elapsed-time scheduling where Node.js provides one, wh
 
 - incoming samples retain their source timestamps;
 - overdue applications run once after restart, not once per missed interval;
-- stale-data checks run immediately after state restoration;
+- restored Application and Datastream due timestamps are recalculated from their restored last-run/last-update timestamps and the active configured interval;
 - future persisted due times beyond a reasonable clock-skew tolerance are recalculated.
 
-Preserve the existing restart behavior: persisted `nextRunTs` values participate in the same due-time carousel after startup. An overdue application runs once; its execution sets `lastRunTs` to the current Unix timestamp and `nextRunTs` to `lastRunTs + runInterval`. Missed historical intervals are not replayed.
+Do not restore persisted `nextRunTs` or `nextUpdTs` as authoritative scheduling state. A configuration change made while a Node-RED flow is stopped must take effect immediately on restart: calculate each deadline from its restored `lastRunTs` or `lastUpdTs` plus the currently configured interval. An overdue application runs once; its execution sets `lastRunTs` to the current Unix timestamp and `nextRunTs` to `lastRunTs + runInterval`. Missed historical intervals are not replayed. A new Datastream initializes its last-update timestamp from the session start so its configured startup grace remains intact.
 
 Ensure one stale check or plugin execution failure cannot stop either scheduler. Scheduler tasks must be isolated, awaited, and reported through the Engine diagnostic service.
 
@@ -434,7 +450,7 @@ export interface StateStore {
 
 Provide a Node-RED context adapter as the primary implementation. Because `/etc/node_red/settings.js` is accessible, the deployment can enable Node-RED's built-in `localfilesystem` context store. Name this store `ieps` (Insight Engine Persistent Storage). By default it persists beneath the Node-RED user directory, `/etc/node_red/data`, and coalesces writes according to its configured flush interval. The engine configuration selects `ieps` but remains independent of its implementation through `StateStore`.
 
-Do not have the npm package edit `settings.js` automatically. Document the required `contextStorage` entry and fail clearly if the selected persistent store is unavailable. A package-owned file adapter remains an optional fallback for deployments where changing `settings.js` is undesirable or unsupported.
+Do not have the npm package edit `settings.js` automatically. The Engine config node trims its Context store setting and uses the selected named store when it is configured. If the setting is blank or names an unavailable store, it starts with Node-RED's configured default store instead, emits `node.warn`, and shows a yellow `ready: default context store` status. When `contextStorage.default` names a configured provider, that provider is selected explicitly; otherwise the adapter omits the store selector and lets Node-RED choose its built-in default. This preserves Node-RED's normal fallback behavior but can make Engine state volatile, so production deployments that require restart recovery must still configure and select `ieps`. A package-owned file adapter remains an optional fallback for deployments where changing `settings.js` is undesirable or unsupported.
 
 Any package-owned file adapter should use a private subdirectory under `/etc/node_red/data`, verify it is writable at startup, and:
 
@@ -458,7 +474,7 @@ Important rules:
 - bound all datastream buffers by both age and length;
 - treat `(datastream ID, timestamp)` as the sample identity and replace an existing sample when a newer reading arrives with the same timestamp;
 - distinguish configuration from runtime state so redeploying settings does not silently overwrite measurements;
-- remove obsolete state only after a successful configuration build, not while startup is partially complete.
+- remove obsolete state and condition diagnostics only after a successful configuration build, not while startup is partially complete. Retain only condition diagnostics whose source is the active Engine or a live configured entity; clear diagnostics for removed entities before persisting the replacement snapshot.
 
 Because abrupt power loss is realistic on an edge gateway, decide and document the acceptable checkpoint interval. Critical outputs may also be sent to an external durable system; local context should not be treated as a historical database.
 
@@ -470,8 +486,9 @@ The current class concepts can remain, with these changes:
 - Base classes receive dependencies such as clock, event sink, and state through constructor context instead of importing a global object or singleton event bus.
 - Use interfaces for state/settings and abstract classes only where shared implementation is valuable.
 - Replace numeric state literals with exported enums, for example `Unknown`, `Ok`, `Warning`, and `Error`.
-- Keep stable machine IDs separate from editable display names. Persist and route by ID.
+- Keep stable machine IDs separate from configured entity names. Persist and route by ID; include names in serializable event/snapshot metadata for operators.
 - Make plugin `execute` and payload parsing support `Promise` even if current implementations are synchronous. The scheduler can then await plugins safely and add timeouts if future plugins perform I/O.
+- Use JavaScript `#` fields consistently for runtime-private state and dependencies. TypeScript `private` remains suitable for private methods where runtime field encapsulation is not required.
 - Prevent overlapping execution of the same application. Choose and test a policy such as skip/coalesce when a previous run is still active.
 - Validate sample timestamps and numeric values centrally; device plugins should add device-specific rules.
 - Define whether duplicate/out-of-order samples are accepted. If accepted, retain the current timestamp sort and specify deduplication behavior.
@@ -508,14 +525,16 @@ Use explicit base-state fields and deterministic parent aggregation:
 
 - `Device.hwError` represents a fault of the Device itself.
 - `Datastream.hwError` represents invalid or fault-signalling sensor data; `Datastream.noDataError` represents stale or absent data.
-- `Device.error = Device.hwError || any child Datastream.hwError || any child Datastream.noDataError`.
+- `Datastream.hasError = Datastream.hwError || Datastream.noDataError`.
+- `Device.chldError = any child Datastream.hasError`; `Device.hasError = Device.hwError || Device.chldError`.
 - `Application.currState` defaults to `Undefined` (`0`), and all Application error booleans default to `false`.
 - `Application.noDataError` is true when required input data is unavailable or stale.
 - `Application.appError` intentionally combines invalid domain/input data that prevents a valid calculation and an exception caught while executing the application plugin. The diagnostic codes distinguish those causes even though the compatibility boolean is shared.
 - `Asset.currState` is the maximum `currState` among its direct Applications, using the declared process-state ordering; with no Applications it uses the validated default state.
-- `Asset.error = any child Application.noDataError || any child Application.appError`.
+- `Application.hasError = Application.noDataError || Application.appError`.
+- `Asset.chldError = any child Application.hasError`; `Asset.hasError = Asset.chldError`.
 
-Datastream-to-Device and Application-to-Asset propagation uses the coalesced parent recomputation described above. A child clearing its final error therefore clears the parent aggregate on the next recomputation. Parent aggregate booleans do not create, copy, or own child diagnostics; diagnostics remain attached to their original source and owner scope. A Device's own `hwError` diagnostic is likewise separate from its `error` summary.
+`chldError` and `hasError` are derived getters, not persisted state. Parent recomputation uses the same values to decide whether an update event and persistence marking are needed. Datastream-to-Device and Application-to-Asset propagation uses the coalesced parent recomputation described above. A child clearing its final error therefore clears the parent aggregate on the next recomputation. Parent aggregate booleans do not create, copy, or own child diagnostics; diagnostics remain attached to their original source and owner scope. A Device's own `hwError` diagnostic is likewise separate from its `hasError` summary.
 
 Immediately before every Application evaluation, the base runner resets its common result fields to their defaults: `currState = Undefined (0)`, `noDataError = false`, and `appError = false`. It then refreshes the stale status of every required Datastream and invokes the plugin. The plugin may set `currState`, `noDataError`, or `appError` as part of a completed evaluation.
 
@@ -537,13 +556,13 @@ Use stable machine-readable diagnostic codes rather than display text as identit
 
 ```ts
 interface Diagnostic {
-  category: "Common" | "Device" | "Datastream" | "Application" | "Asset";
+  category: 'Common' | 'Device' | 'Datastream' | 'Application' | 'Asset';
   sourceId: string;
   ownerScope: string;
   code: string;
-  severity: "error" | "warning" | "info";
+  severity: 'error' | 'warning' | 'info';
   message: string;
-  retention: "condition" | "session";
+  retention: 'condition' | 'session';
   firstRaisedTs: number;
   lastUpdatedTs: number;
   lastObservedTs: number;
@@ -567,7 +586,7 @@ Plugins should not reproduce the old `logPayload` pattern or emit `null` values 
 interface DiagnosticReporter {
   report(input: {
     code: string;
-    severity: "error" | "warning" | "info";
+    severity: 'error' | 'warning' | 'info';
     message: string;
     details?: Record<string, unknown>;
   }): void;
@@ -584,6 +603,10 @@ Calls are idempotent by diagnostic code within the current owner scope; reportin
 For example, an Application simply calls `report()` when `FAILED_CLOSED` or `NO_DATA` is present. If it reports only `NO_DATA` on its next successful evaluation, the Engine emits `diagnostic.cleared` for the previously active `FAILED_CLOSED`. A subsequent successful evaluation with no `report()` calls clears `NO_DATA`. The plugin contains only condition detection; the Engine supplies identity, timestamps, reconciliation, persistence, and lifecycle events.
 
 Reconcile only after a successful evaluation. If plugin execution throws, retain its previous condition diagnostics and raise/update a separate execution-error diagnostic owned by the base runner. One owner scope must never clear another scope's diagnostics. Provide an explicit `clearDiagnostic(code)` operation for genuinely asynchronous conditions, but use complete-set reconciliation for ordinary device parsing and application evaluation.
+
+An Application evaluation context includes its `sessionStartTs`, complete read-only `DatastreamState` for every mapped datafeed, an Application-scoped reporter, and an Asset-scoped reporter for its direct parent. The parent reporter gives an application a controlled way to raise a condition on behalf of its Asset. Its scope identity includes the Application ID, so an application reconciles only diagnostics that it owns even when several applications report conditions on the same Asset. For example, the Twin Temperature Failed Closed plugin owns its `FAILED_CLOSED` diagnostic on the Asset while retaining its process warning on the Application.
+
+The Twin Temperature Failed Closed plugin waits until its own configured `windowSizeMs` has elapsed from `sessionStartTs` before reporting missing averages as `NO_DATA`, unless that condition was already active before a new session. A Datastream uses its configured grace period before initially reporting an empty buffer, but preserves a restored active `NO_DATA` condition during the new session's grace period. The Enless Twin Temperature plugin treats out-of-range readings as consecutive faulty values and raises `SENSOR_BROKEN` only when the configured `numFaultyValues` threshold is reached. Its default threshold is three; a valid reading resets the counter for that Datastream.
 
 State calculation should still be transactional. An application result can have this shape, while diagnostics are collected through the scoped reporter:
 
@@ -616,7 +639,7 @@ A new engine session begins whenever the Engine config node starts after a Node-
 
 Successful Engine startup means that configuration, plugin registration, state initialization, entity construction, persistence access, and scheduler startup succeeded. It does not mean every Application calculation is healthy: a plugin evaluation failure becomes Application state and diagnostics while the Engine may remain ready. A failure in the startup infrastructure transitions the Engine to `failed`, keeps `isReady = false`, and publishes/replays the false lifecycle state; it must not publish `engine.ready`.
 
-`sessionStartTs` is runtime session metadata and must never be restored from the previous session. Datastream and application startup grace-period calculations use this newly assigned Unix timestamp. Restored condition diagnostics may be visible briefly until their owners reevaluate; this is preferable to losing an active alarm during restart.
+`sessionStartTs` is runtime session metadata and must never be restored from the previous session. Datastream and application startup grace-period calculations use this newly assigned Unix timestamp. A restored active `NO_DATA` condition stays active through that new grace period, preventing an artificial clear/raise pair after redeploy. Other restored condition diagnostics remain visible until their owners reevaluate; this is preferable to losing an active alarm during restart.
 
 ### Persistence and dashboard delivery
 
@@ -709,7 +732,7 @@ Do not rewrite everything and integrate it all at once. A staged migration reduc
 
 ### Phase 4: Add Node-RED adapters
 
-- implement the Engine config, UG6x Input, Engine Message Receiver, and Engine State Snapshot nodes;
+- implement the Engine config, Engine Input, Engine Message Receiver, and Engine State Snapshot nodes;
 - implement diagnostic reconciliation and adapt lifecycle events plus explicit snapshots to existing consumer flows;
 - test start, partial deploy, full deploy, stop, and restart behavior;
 - compare the new implementation with recorded inputs and expected outputs derived from `old_code` tests.
@@ -733,8 +756,8 @@ The following points are now decided:
 - CI tests installation and startup using the exact packed artifacts;
 - one active engine is allowed per Node-RED runtime; no worker threads are introduced initially;
 - Node-RED's `ieps` context store coalesces disk writes with a configurable 60-to-300-second `flushInterval`, initially 300 seconds;
-- `msg.deviceName` selects the device and `msg.gatewayTime` supplies the source timestamp;
-- both input fields are top-level; missing or invalid `gatewayTime` falls back to the adapter's `receivedTs` and the Engine owns the resulting diagnostic;
+- Engine Input consumes `msg.payload.deviceName`, `msg.payload.rawPayload`, and `msg.payload.timestamp`; source-specific Function or Change nodes must normalize each gateway message to that shape;
+- malformed Engine Input payloads are rejected before plugin parsing with an Engine-owned Common diagnostic, while internal receipt time is calculated from the Engine clock;
 - all internal, persisted, and emitted timestamps are Unix epoch milliseconds;
 - a newer sample replaces an existing sample in the same datastream when their timestamps are equal;
 - a wall-clock jump beyond the configured temporal horizon cold-resets all Engine-managed runtime and persistent state through `StateStore`;
@@ -756,7 +779,7 @@ No architecture-blocking decisions remain from this review. Consumer-specific da
 
 ## 15. Summary Recommendation
 
-Build one reusable TypeScript core, one Node-RED integration package, one npm package per device/application plugin, and an optional gateway profile selecting the required plugins. Let the single Engine config node own lifecycle, both independent schedulers, its event bus, and its read-only registry. Use UG6x Input for gateway normalization, Engine Message Receiver for lightweight notifications, and Engine State Snapshot for explicit immutable state reads. Keep all three independent from downstream consumer protocols. Store deployment configuration as validated JSON using stable type IDs, while defaults and schemas live with their plugins. Persist versioned plain state through the `StateStore` abstraction, normally backed by Node-RED's `ieps` `localfilesystem` context store with a 60-to-300-second flush interval. Treat empty storage as a supported cold start and a large clock jump as a deliberate cold reset.
+Build one reusable TypeScript core, one Node-RED integration package, one npm package per device/application plugin, and an optional gateway profile selecting the required plugins. Let the single Engine config node own lifecycle, both independent schedulers, its event bus, and its read-only registry. Use Function or Change nodes for source normalization, Engine Input for validated ingestion, Engine Message Receiver for lightweight notifications, and Engine State Snapshot for explicit immutable state reads. Keep all three independent from downstream consumer protocols. Store deployment configuration as validated JSON using stable type IDs, while defaults and schemas live with their plugins. Persist versioned plain state through the `StateStore` abstraction, normally backed by Node-RED's `ieps` `localfilesystem` context store with a 60-to-300-second flush interval. Treat empty storage as a supported cold start and a large clock jump as a deliberate cold reset.
 
 This retains the original publish/subscribe freedom without adding one output per event type or exposing mutable live instances to flows. It also gives normal Git, tests, source maps, and debugging; keeps each gateway installation small; preserves Node-RED's role as the integration layer; and avoids turning the Node-RED editor into a second source-code repository.
 

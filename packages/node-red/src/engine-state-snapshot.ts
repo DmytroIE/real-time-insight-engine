@@ -29,6 +29,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isEntityKind = (value: unknown): value is EntityKind =>
   Object.values(EntityKind).includes(value as EntityKind);
 
+const isDiagnosticEntityType = (value: unknown): value is EntityKind | 'common' =>
+  value === 'common' || isEntityKind(value);
+
 export const parseSnapshotRequest = (value: unknown): SnapshotRequest => {
   const request = typeof value === 'string' ? (JSON.parse(value) as unknown) : value;
   if (!isRecord(request) || !isRecord(request['target'])) {
@@ -36,9 +39,29 @@ export const parseSnapshotRequest = (value: unknown): SnapshotRequest => {
   }
   const target = request['target'];
   const scope = target['scope'];
-  if (scope === 'entity') {
-    if (!isEntityKind(target['entityType']) || typeof target['entityId'] !== 'string') {
-      throw new SnapshotRequestError('Snapshot entity target is invalid');
+  if (scope === 'entities' || scope === 'diagnostics') {
+    const entityType = target['entityType'];
+    const entityId = target['entityId'];
+    if (entityId !== undefined && typeof entityId !== 'string') {
+      throw new SnapshotRequestError('Snapshot target entityId must be a string');
+    }
+    if (entityId !== undefined && entityType === undefined) {
+      throw new SnapshotRequestError('Snapshot target entityId requires entityType');
+    }
+    const validType =
+      scope === 'entities' ? isEntityKind(entityType) : isDiagnosticEntityType(entityType);
+    if (entityType !== undefined && !validType) {
+      throw new SnapshotRequestError('Snapshot target entityType is invalid');
+    }
+    if (
+      scope === 'diagnostics' &&
+      (request['relations'] !== undefined ||
+        request['statePaths'] !== undefined ||
+        request['strictPaths'] !== undefined)
+    ) {
+      throw new SnapshotRequestError(
+        'Snapshot diagnostics target does not support relations or state paths',
+      );
     }
   } else if (scope !== 'eventSource' && scope !== 'all') {
     throw new SnapshotRequestError('Snapshot target scope is invalid');

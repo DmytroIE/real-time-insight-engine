@@ -21,3 +21,19 @@ export const asAssetId = (value: string): AssetId => asBrandedId<'AssetId'>(valu
 export const asApplicationId = (value: string): ApplicationId =>
   asBrandedId<'ApplicationId'>(value);
 export const asPluginTypeId = (value: string): PluginTypeId => asBrandedId<'PluginTypeId'>(value);
+
+const encodeNameSegment = (name: string): string =>
+  encodeURIComponent(name).replace(
+    /[!'()*]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+
+export const deviceIdForName = (name: string): DeviceId => asDeviceId(encodeNameSegment(name));
+
+export const datastreamIdForNames = (deviceName: string, datastreamName: string): DatastreamId =>
+  asDatastreamId(`${encodeNameSegment(deviceName)}/${encodeNameSegment(datastreamName)}`);
+
+export const assetIdForName = (name: string): AssetId => asAssetId(encodeNameSegment(name));
+
+export const applicationIdForNames = (assetName: string, applicationName: string): ApplicationId =>
+  asApplicationId(`${encodeNameSegment(assetName)}/${encodeNameSegment(applicationName)}`);

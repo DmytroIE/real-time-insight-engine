@@ -8,6 +8,7 @@ import {
   asApplicationId,
   asDeviceId,
   asEngineId,
+  asDatastreamId,
   type Clock,
   type EngineConfiguration,
   type TimerCallback,
@@ -100,22 +101,24 @@ const ingest = (
 ): Promise<boolean> =>
   engine.ingest({
     deviceId: asDeviceId('device-1'),
-    rawPayload: { object: { sensorType: 12, temp1: tempIn, temp2: tempOut } },
-    sourceTimestamp: timestamp,
-    receivedTimestamp: timestamp,
+    rawPayload: { sensorType: 12, temp1: tempIn, temp2: tempOut },
+    timestamp,
   });
 
 const applicationState = (engine: Engine) =>
   engine.snapshot({
     target: {
-      scope: 'entity',
+      scope: 'entities',
       entityType: EntityKind.Application,
       entityId: applicationId,
     },
-  }).entities[0]?.state;
+  }).entities.application[applicationId]?.state;
 
 const applicationDiagnostics = (engine: Engine) =>
-  engine.snapshot({ target: { scope: 'all' } }).diagnostics?.Application ?? [];
+  Object.values(engine.snapshot({ target: { scope: 'all' } }).diagnostics.application).flat();
+
+const assetDiagnostics = (engine: Engine) =>
+  Object.values(engine.snapshot({ target: { scope: 'all' } }).diagnostics.asset).flat();
 
 describe('PLUG-APP-01 manifest', () => {
   it('exposes stable feeds, settings schema, defaults, and state', () => {
@@ -142,7 +145,10 @@ describe('PLUG-APP-01 manifest', () => {
 
 describe('PLUG-APP-02 missing averages', () => {
   it('remains Undefined during grace, then raises NO_DATA', async () => {
-    const { clock, engine } = createEngine();
+    const { clock, engine } = createEngine({
+      ...twinTemperatureFailedClosedDefaultSettings,
+      windowSizeMs: 100,
+    });
 
     await expect(engine.runApplication(applicationId)).resolves.toBe('completed');
     expect(applicationState(engine)).toMatchObject({
@@ -153,7 +159,7 @@ describe('PLUG-APP-02 missing averages', () => {
     });
     expect(applicationDiagnostics(engine)).toEqual([]);
 
-    clock.now = 1_200;
+    clock.now = 1_100;
     await expect(engine.runApplication(applicationId)).resolves.toBe('completed');
     expect(applicationState(engine)).toMatchObject({
       currState: ProcessState.Undefined,
@@ -163,6 +169,47 @@ describe('PLUG-APP-02 missing averages', () => {
     expect(applicationDiagnostics(engine)).toMatchObject([
       { ownerScope: 'application-calculation', code: 'NO_DATA', severity: 'error' },
     ]);
+  });
+
+  it('retains a previously active no-data condition during a new session grace period', () => {
+    const reports: string[] = [];
+    const evaluator = twinTemperatureFailedClosedApplicationPlugin.create({
+      id: applicationId,
+      settings: { ...twinTemperatureFailedClosedDefaultSettings, windowSizeMs: 100 },
+      datafeeds: {},
+    });
+    const emptyDatafeed = {
+      id: asDatastreamId('device-1/temp1'),
+      evaluateStale: () => false,
+      state: () => ({
+        lastUpdateTimestamp: 1_000,
+        nextUpdateTimestamp: 1_150,
+        noDataError: false,
+        hwError: false,
+        samples: [],
+      }),
+      averageValue: () => null,
+    };
+
+    const result = evaluator.evaluate({
+      timestamp: 1_050,
+      sessionStartTs: 1_000,
+      previousNoDataError: true,
+      state: {
+        currState: ProcessState.Undefined,
+        noDataError: false,
+        appError: false,
+        lastRunTimestamp: 1_000,
+        nextRunTimestamp: 1_100,
+        pluginState: twinTemperatureFailedClosedDefaultState,
+      },
+      datafeeds: { tempIn: emptyDatafeed, tempOut: emptyDatafeed },
+      diagnostics: { report: ({ code }) => reports.push(code) },
+      assetDiagnostics: { report: () => undefined },
+    });
+
+    expect(result).toMatchObject({ noDataError: true });
+    expect(reports).toEqual(['NO_DATA']);
   });
 });
 
@@ -214,7 +261,7 @@ describe('PLUG-APP-05 and PLUG-APP-06 on state', () => {
       appError: false,
       pluginState: { operState: PluginOperatingState.On },
     });
-    expect(applicationDiagnostics(engine)).toMatchObject([
+    expect(assetDiagnostics(engine)).toMatchObject([
       { code: 'FAILED_CLOSED', severity: 'warning' },
     ]);
 
@@ -259,11 +306,12 @@ describe('PLUG-APP-08 scoped reporting', () => {
 
     await engine.runApplication(applicationId);
 
-    expect(applicationDiagnostics(engine)).toHaveLength(1);
-    expect(applicationDiagnostics(engine)[0]).toMatchObject({
-      ownerScope: 'application-calculation',
+    expect(applicationDiagnostics(engine)).toEqual([]);
+    expect(assetDiagnostics(engine)).toHaveLength(1);
+    expect(assetDiagnostics(engine)[0]).toMatchObject({
+      ownerScope: 'application:asset-1/failed-closed:application-calculation',
       code: 'FAILED_CLOSED',
     });
-    expect(Object.values(applicationDiagnostics(engine)[0] ?? {})).not.toContain(null);
+    expect(Object.values(assetDiagnostics(engine)[0] ?? {})).not.toContain(null);
   });
 });

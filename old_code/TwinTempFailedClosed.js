@@ -37,13 +37,15 @@ class TwinTempFailedClosed extends Application {
 
         const sessionStartTs = global.get("sessionStartTs") ?? 0;
         const logPayload = {
-            "No data available": null,
-            "Temp out > Temp in": null,
-            "Trap is off": null,
-            "Failed closed": null
+            "No data available": { level: null },
+            "Temp out > Temp in": { level: null },
+            "Trap is off": { level: null },
+        };
+        const assetLogPayload = {
+            "Failed closed": { level: null }
         };
         if (tempInAvg == null || tempOutAvg == null) {
-            if (nowTs - sessionStartTs > this.dsMap["tempOut"].updInterval * global.get("INTERVAL_MARGIN_COEFFICIENT")) {
+            if (nowTs - sessionStartTs > windowSize) {
                 this.state.noDataError = true;
                 logPayload["No data available"] = { level: "e" };
             }
@@ -61,7 +63,7 @@ class TwinTempFailedClosed extends Application {
                     this.state.operState = 2; // On
                     if (tempInAvg.v - tempOutAvg.v > tempDiffThreshold) {
                         this.state.currState = 2; // Warning
-                        logPayload["Failed closed"] = { level: "w" };
+                        assetLogPayload["Failed closed"] = { level: "w" };
                     }
                     else {
                         this.state.currState = 1; // OK
@@ -80,10 +82,16 @@ class TwinTempFailedClosed extends Application {
                 payload: logPayload
             }
         );
-        console.log("Buffered values:")
-        console.log(this.dsMap["tempIn"].state.valBuffer);
-        console.log(this.dsMap["tempOut"].state.valBuffer);
+        eventBus.emit(
+            "log",
+            {
+                instance: this.parent,
+                timestamp: nowTs,
+                payload: assetLogPayload
+            }
+        );
     }
 }
+
 
 export { TwinTempFailedClosed };

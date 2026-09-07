@@ -85,7 +85,9 @@ const evaluate = (
   };
 
   if (tempInAvg === null || tempOutAvg === null) {
-    const noDataError = tempIn.state().noDataError || tempOut.state().noDataError;
+    const noDataError =
+      context.timestamp - context.sessionStartTs >= settings.windowSizeMs ||
+      context.previousNoDataError;
     if (noDataError) {
       context.diagnostics.report({
         code: 'NO_DATA',
@@ -115,7 +117,7 @@ const evaluate = (
   }
 
   if (tempInAvg.value - tempOutAvg.value > settings.tempDiffThreshold) {
-    context.diagnostics.report({
+    context.assetDiagnostics.report({
       code: 'FAILED_CLOSED',
       severity: 'warning',
       message: 'Temperature difference indicates a failed-closed condition',
@@ -138,12 +140,16 @@ const evaluate = (
 };
 
 class TwinTemperatureFailedClosedEvaluator implements ApplicationEvaluator<TwinTemperatureFailedClosedState> {
-  public constructor(private readonly settings: TwinTemperatureFailedClosedSettings) {}
+  readonly #settings: TwinTemperatureFailedClosedSettings;
+
+  public constructor(settings: TwinTemperatureFailedClosedSettings) {
+    this.#settings = settings;
+  }
 
   public evaluate(
     context: ApplicationEvaluationContext<TwinTemperatureFailedClosedState>,
   ): ApplicationResult<TwinTemperatureFailedClosedState> {
-    return evaluate(this.settings, context);
+    return evaluate(this.#settings, context);
   }
 }
 

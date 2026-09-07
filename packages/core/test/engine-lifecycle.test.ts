@@ -229,8 +229,10 @@ describe('LIFE-06 health and readiness', () => {
 
     expect(engine.isReady).toBe(true);
     expect(engine.lifecycleState).toBe('ready');
-    expect(engine.snapshot({ target: { scope: 'all' } }).diagnostics?.Application).toEqual([
-      expect.objectContaining({ code: 'APPLICATION_EXECUTION_ERROR' }),
-    ]);
+    expect(
+      engine.snapshot({ target: { scope: 'all' } }).diagnostics.application[
+        'asset-1/application-1'
+      ],
+    ).toEqual([expect.objectContaining({ code: 'APPLICATION_EXECUTION_ERROR' })]);
   });
 });

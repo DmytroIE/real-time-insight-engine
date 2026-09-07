@@ -7,6 +7,7 @@ import {
   InMemoryEventBus,
   ProcessState,
   asApplicationId,
+  asAssetId,
   asEngineId,
   asPluginTypeId,
   type ApplicationResult,
@@ -28,9 +29,11 @@ const createApplication = (
   return new Application(
     {
       id: asApplicationId('asset/application'),
+      assetId: asAssetId('asset'),
       engineId: asEngineId('engine-1'),
       pluginType: asPluginTypeId('sxs.test-application'),
       runIntervalMs: 100,
+      sessionStartTimestamp: 0,
     },
     {},
     { evaluate },

@@ -5,9 +5,26 @@ import type { EntityKind, EntityRef } from './model';
 
 export type SnapshotRelations = 'self' | 'parent' | 'children' | 'family';
 
+type SnapshotEntityTarget =
+  | { readonly scope: 'entities'; readonly entityType?: undefined; readonly entityId?: undefined }
+  | { readonly scope: 'entities'; readonly entityType: EntityKind; readonly entityId?: string };
+
+type SnapshotDiagnosticsTarget =
+  | {
+      readonly scope: 'diagnostics';
+      readonly entityType?: undefined;
+      readonly entityId?: undefined;
+    }
+  | {
+      readonly scope: 'diagnostics';
+      readonly entityType: EntityKind | 'common';
+      readonly entityId?: string;
+    };
+
 export type SnapshotTarget =
   | { readonly scope: 'eventSource' }
-  | { readonly scope: 'entity'; readonly entityType: EntityKind; readonly entityId: string }
+  | SnapshotEntityTarget
+  | SnapshotDiagnosticsTarget
   | { readonly scope: 'all' };
 
 export interface SnapshotRequest {
@@ -26,6 +43,7 @@ export interface EntityRelationships {
 export interface EntitySnapshot {
   readonly entityType: EntityKind;
   readonly entityId: string;
+  readonly entityName?: string;
   readonly pluginType?: PluginTypeId;
   readonly relationships: EntityRelationships;
   readonly state: Readonly<object>;
@@ -36,11 +54,19 @@ export interface MissingStatePath {
   readonly path: string;
 }
 
-export type SnapshotDiagnosticGroups = Readonly<Record<DiagnosticCategory, readonly Diagnostic[]>>;
+export type SnapshotEntityGroups = Readonly<
+  Record<EntityKind, Readonly<Record<string, EntitySnapshot>>>
+>;
+
+export type SnapshotDiagnosticCategory = Lowercase<DiagnosticCategory>;
+
+export type SnapshotDiagnosticGroups = Readonly<
+  Record<SnapshotDiagnosticCategory, Readonly<Record<string, readonly Diagnostic[]>>>
+>;
 
 export interface EngineSnapshotResponse {
-  readonly entities: readonly EntitySnapshot[];
-  readonly diagnostics?: SnapshotDiagnosticGroups;
+  readonly entities: SnapshotEntityGroups;
+  readonly diagnostics: SnapshotDiagnosticGroups;
   readonly missingPaths: readonly MissingStatePath[];
 }
 

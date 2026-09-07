@@ -24,6 +24,11 @@ export interface ApplicationSchedulerOptions {
 
 export class ApplicationScheduler {
   readonly #retryAfter = new Map<ApplicationId, number>();
+  readonly #clock: Clock;
+  readonly #timers: TimerScheduler;
+  readonly #tasks: () => readonly ApplicationTask[];
+  readonly #onTaskResult: (result: ApplicationTaskResult) => void;
+  readonly #options: ApplicationSchedulerOptions;
   #timer: unknown;
   #started = false;
   #stopped = false;
@@ -31,12 +36,18 @@ export class ApplicationScheduler {
   #runPromise: Promise<void> | undefined;
 
   public constructor(
-    private readonly clock: Clock,
-    private readonly timers: TimerScheduler,
-    private readonly tasks: () => readonly ApplicationTask[],
-    private readonly onTaskResult: (result: ApplicationTaskResult) => void = () => undefined,
-    private readonly options: ApplicationSchedulerOptions = {},
-  ) {}
+    clock: Clock,
+    timers: TimerScheduler,
+    tasks: () => readonly ApplicationTask[],
+    onTaskResult: (result: ApplicationTaskResult) => void = () => undefined,
+    options: ApplicationSchedulerOptions = {},
+  ) {
+    this.#clock = clock;
+    this.#timers = timers;
+    this.#tasks = tasks;
+    this.#onTaskResult = onTaskResult;
+    this.#options = options;
+  }
 
   public start(): void {
     if (this.#started) {
@@ -54,7 +65,7 @@ export class ApplicationScheduler {
     this.#stopped = true;
     this.#started = false;
     if (this.#timer !== undefined) {
-      this.timers.clearTimeout(this.#timer);
+      this.#timers.clearTimeout(this.#timer);
       this.#timer = undefined;
     }
     this.#retryAfter.clear();
@@ -77,11 +88,11 @@ export class ApplicationScheduler {
   private async runDueTasks(): Promise<void> {
     this.#running = true;
     try {
-      const now = this.clock.wallTimeMs();
-      const due = this.tasks()
+      const now = this.#clock.wallTimeMs();
+      const due = this.#tasks()
         .filter((task) => this.effectiveDueTimestamp(task) <= now)
         .sort((left, right) => this.effectiveDueTimestamp(left) - this.effectiveDueTimestamp(right))
-        .slice(0, this.options.batchSize ?? DEFAULT_APPLICATION_SCAN_BATCH_SIZE);
+        .slice(0, this.#options.batchSize ?? DEFAULT_APPLICATION_SCAN_BATCH_SIZE);
 
       for (const task of due) {
         try {
@@ -108,13 +119,13 @@ export class ApplicationScheduler {
     if (this.#stopped || this.#running || this.#timer !== undefined) {
       return;
     }
-    const tasks = this.tasks();
+    const tasks = this.#tasks();
     if (tasks.length === 0) {
       return;
     }
     const nextDue = Math.min(...tasks.map((task) => this.effectiveDueTimestamp(task)));
-    const delayMs = Math.max(0, nextDue - this.clock.wallTimeMs());
-    this.#timer = this.timers.setTimeout(() => this.runDueAndReschedule(), delayMs);
+    const delayMs = Math.max(0, nextDue - this.#clock.wallTimeMs());
+    this.#timer = this.#timers.setTimeout(() => this.runDueAndReschedule(), delayMs);
   }
 
   private effectiveDueTimestamp(task: ApplicationTask): number {
@@ -124,13 +135,13 @@ export class ApplicationScheduler {
   private deferRetry(task: ApplicationTask, now: number): void {
     this.#retryAfter.set(
       task.id,
-      now + (this.options.retryDelayMs ?? DEFAULT_APPLICATION_TASK_RETRY_DELAY_MS),
+      now + (this.#options.retryDelayMs ?? DEFAULT_APPLICATION_TASK_RETRY_DELAY_MS),
     );
   }
 
   private notify(result: ApplicationTaskResult): void {
     try {
-      this.onTaskResult(result);
+      this.#onTaskResult(result);
     } catch {
       // Reporting failures must not stop scheduler progress.
     }

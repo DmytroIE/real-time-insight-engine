@@ -157,8 +157,7 @@ describe('LIFE-07 immediate shutdown gate', () => {
       engine.ingest({
         deviceId: asDeviceId('device-1'),
         rawPayload: {},
-        sourceTimestamp: 1_000,
-        receivedTimestamp: 1_000,
+        timestamp: 1_000,
       }),
     ).toThrow('Engine is not ready');
     await store.saveStarted;
@@ -198,7 +197,7 @@ describe('LIFE-08 coordinated drain and cleanup', () => {
       store.load<PersistedEngineSnapshot>(engineSnapshotKey(asEngineId('engine-1'))),
     ).resolves.toMatchObject({
       entityStates: {
-        assets: { 'asset-1': { currState: ProcessState.Ok, error: false } },
+        assets: { 'asset-1': { currState: ProcessState.Ok } },
         applications: {
           'asset-1/application-1': { pluginState: { runs: 1 }, currState: ProcessState.Ok },
         },

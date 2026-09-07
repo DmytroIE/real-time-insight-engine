@@ -1,0 +1,64 @@
+<script type="text/javascript">
+  RED.nodes.registerType('engine-input', {
+    category: 'sxs industrial',
+    color: '#8fb8a8',
+    defaults: {
+      name: { value: '' },
+      engine: { value: '', type: 'insight-engine', required: true },
+      readinessPolicy: { value: 'reject', required: true },
+    },
+    inputs: 1,
+    outputs: 0,
+    label: function () {
+      return this.name || 'Engine Input';
+    },
+  });
+</script>
+
+<script type="text/html" data-template-name="engine-input">
+  <div class="form-row">
+    <label for="node-input-name">Name</label>
+    <input type="text" id="node-input-name" />
+  </div>
+  <div class="form-row">
+    <label for="node-input-engine">Engine</label>
+    <input type="text" id="node-input-engine" />
+  </div>
+  <div class="form-row">
+    <label for="node-input-readinessPolicy">When not ready</label>
+    <select id="node-input-readinessPolicy">
+      <option value="reject">Reject</option>
+      <option value="queue">Queue</option>
+    </select>
+  </div>
+</script>
+
+<script type="text/x-red" data-help-name="engine-input">
+    <p>Sends a validated device reading to an Insight Engine.</p>
+    <p>
+      Put a Function or Change node before this node to convert each source message to the
+      required payload. This node has no output. Use an Engine Message Receiver to observe
+      diagnostics and state changes.
+    </p>
+    <p><strong>Input</strong></p>
+    <p>The input message must contain:</p>
+    <pre>msg.payload = {
+    deviceName: "Device 1",
+    rawPayload: { sensorType: 12, temp1: 25.6, temp2: 45.3 },
+    timestamp: 1787328000000
+  };</pre>
+    <ul>
+      <li><code>deviceName</code> is the configured Device name.</li>
+      <li><code>rawPayload</code> is an object read by the configured Device plugin.</li>
+      <li><code>timestamp</code> is the reading time in Unix epoch milliseconds.</li>
+    </ul>
+    <p>
+      Invalid input is rejected before Device parsing. The Engine publishes an
+      <code>INVALID_INGEST_ENVELOPE</code> diagnostic. An unknown Device publishes
+      <code>DEVICE_NOT_RECOGNIZED</code>.
+    </p>
+    <p>
+      Select <b>Reject</b> to discard input while the Engine is not ready. Select <b>Queue</b>
+      to wait until it is ready.
+    </p>
+</script>

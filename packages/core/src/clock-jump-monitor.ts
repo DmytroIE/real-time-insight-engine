@@ -10,18 +10,28 @@ export interface ClockJump {
 }
 
 export class ClockJumpMonitor {
+  readonly #clock: Clock;
+  readonly #timers: TimerScheduler;
+  readonly #thresholdMs: number;
+  readonly #onJump: (jump: ClockJump) => Promise<void>;
+  readonly #checkIntervalMs: number;
   #previousWallMs: number;
   #previousMonotonicMs: number;
   #timer: unknown;
   #started = false;
 
   public constructor(
-    private readonly clock: Clock,
-    private readonly timers: TimerScheduler,
-    private readonly thresholdMs: number,
-    private readonly onJump: (jump: ClockJump) => Promise<void>,
-    private readonly checkIntervalMs = DEFAULT_CLOCK_CHECK_INTERVAL_MS,
+    clock: Clock,
+    timers: TimerScheduler,
+    thresholdMs: number,
+    onJump: (jump: ClockJump) => Promise<void>,
+    checkIntervalMs = DEFAULT_CLOCK_CHECK_INTERVAL_MS,
   ) {
+    this.#clock = clock;
+    this.#timers = timers;
+    this.#thresholdMs = thresholdMs;
+    this.#onJump = onJump;
+    this.#checkIntervalMs = checkIntervalMs;
     this.#previousWallMs = clock.wallTimeMs();
     this.#previousMonotonicMs = clock.monotonicTimeMs();
   }
@@ -41,14 +51,14 @@ export class ClockJumpMonitor {
     }
     this.#started = false;
     if (this.#timer !== undefined) {
-      this.timers.clearTimeout(this.#timer);
+      this.#timers.clearTimeout(this.#timer);
       this.#timer = undefined;
     }
   }
 
   public async checkNow(): Promise<boolean> {
-    const wallNow = this.clock.wallTimeMs();
-    const monotonicNow = this.clock.monotonicTimeMs();
+    const wallNow = this.#clock.wallTimeMs();
+    const monotonicNow = this.#clock.monotonicTimeMs();
     const jump: ClockJump = {
       wallElapsedMs: wallNow - this.#previousWallMs,
       monotonicElapsedMs: monotonicNow - this.#previousMonotonicMs,
@@ -58,10 +68,10 @@ export class ClockJumpMonitor {
     };
     this.#previousWallMs = wallNow;
     this.#previousMonotonicMs = monotonicNow;
-    if (jump.differenceMs <= this.thresholdMs) {
+    if (jump.differenceMs <= this.#thresholdMs) {
       return false;
     }
-    await this.onJump(jump);
+    await this.#onJump(jump);
     this.resetBaseline();
     return true;
   }
@@ -70,7 +80,7 @@ export class ClockJumpMonitor {
     if (!this.#started || this.#timer !== undefined) {
       return;
     }
-    this.#timer = this.timers.setTimeout(async () => {
+    this.#timer = this.#timers.setTimeout(async () => {
       this.#timer = undefined;
       try {
         await this.checkNow();
@@ -79,11 +89,11 @@ export class ClockJumpMonitor {
       } finally {
         this.schedule();
       }
-    }, this.checkIntervalMs);
+    }, this.#checkIntervalMs);
   }
 
   private resetBaseline(): void {
-    this.#previousWallMs = this.clock.wallTimeMs();
-    this.#previousMonotonicMs = this.clock.monotonicTimeMs();
+    this.#previousWallMs = this.#clock.wallTimeMs();
+    this.#previousMonotonicMs = this.#clock.monotonicTimeMs();
   }
 }

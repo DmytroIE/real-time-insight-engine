@@ -7,6 +7,7 @@ import {
   InMemoryEventBus,
   ProcessState,
   asApplicationId,
+  asAssetId,
   asDatastreamId,
   asEngineId,
   asPluginTypeId,
@@ -33,8 +34,14 @@ class FakeDatastream implements ApplicationDatastream {
     return false;
   }
 
-  public state(): { noDataError: boolean } {
-    return { noDataError: false };
+  public state() {
+    return {
+      lastUpdateTimestamp: 0,
+      nextUpdateTimestamp: 0,
+      noDataError: false,
+      hwError: false,
+      samples: [],
+    };
   }
 
   public averageValue(): null {
@@ -63,6 +70,7 @@ const setup = (
     context: ApplicationEvaluationContext<CalculationState>,
   ) => ApplicationResult<CalculationState> | Promise<ApplicationResult<CalculationState>>,
   nextRunTimestamp = 1_000,
+  lastRunTimestamp = nextRunTimestamp - 100,
 ) => {
   const clock = new FakeClock(1_000, 0);
   const eventBus = new InMemoryEventBus();
@@ -75,9 +83,11 @@ const setup = (
   const application = new Application(
     {
       id: asApplicationId('asset-1/application-1'),
+      assetId: asAssetId('asset-1'),
       engineId: asEngineId('engine-1'),
       pluginType: asPluginTypeId('sxs.test-application'),
       runIntervalMs: 100,
+      sessionStartTimestamp: 1_000,
     },
     { temperature: datastream },
     { evaluate },
@@ -87,6 +97,7 @@ const setup = (
     persistence,
     { value: 1, label: 'initial' },
     {
+      lastRunTimestamp,
       nextRunTimestamp,
       currState: ProcessState.Warning,
       noDataError: true,
@@ -113,6 +124,12 @@ describe('APP-01 due and overlap policy', () => {
     expect(persistence.dirtyCount).toBe(0);
   });
 
+  it('derives a restored deadline from the active configured interval', async () => {
+    const { application } = setup(() => ({ state: {} }), 9_000, 900);
+
+    expect(application.nextApplicationRunTimestamp()).toBe(1_000);
+  });
+
   it('skips an overlapping invocation without starting a second execution', async () => {
     let resolveEvaluation: ((result: ApplicationResult<CalculationState>) => void) | undefined;
     let executions = 0;
@@ -136,9 +153,15 @@ describe('APP-02 common reset and stale refresh', () => {
   it('resets common state and refreshes Datastreams before plugin evaluation', async () => {
     let observedState: unknown;
     let staleChecksAtEvaluation = 0;
+    let observedSessionStartTs = 0;
+    let observedPreviousNoDataError = false;
+    let observedDatafeedState: unknown;
     const setupResult = setup((context) => {
       observedState = context.state;
       staleChecksAtEvaluation = setupResult.datastream.staleChecks;
+      observedSessionStartTs = context.sessionStartTs;
+      observedPreviousNoDataError = context.previousNoDataError;
+      observedDatafeedState = context.datafeeds.temperature?.state();
       return { state: {} };
     });
 
@@ -149,6 +172,15 @@ describe('APP-02 common reset and stale refresh', () => {
       currState: ProcessState.Undefined,
       noDataError: false,
       appError: false,
+    });
+    expect(observedSessionStartTs).toBe(1_000);
+    expect(observedPreviousNoDataError).toBe(true);
+    expect(observedDatafeedState).toEqual({
+      lastUpdateTimestamp: 0,
+      nextUpdateTimestamp: 0,
+      noDataError: false,
+      hwError: false,
+      samples: [],
     });
   });
 });
@@ -256,5 +288,28 @@ describe('APP-06 recovery after failure', () => {
       pluginState: { value: 9, label: 'recovered' },
     });
     expect(diagnostics.records()).toEqual([]);
+  });
+});
+
+describe('Application parent diagnostic scope', () => {
+  it('reconciles Asset diagnostics independently on behalf of its parent Asset', async () => {
+    const { application, diagnostics } = setup((context) => {
+      context.assetDiagnostics.report({
+        code: 'ASSET_CONDITION',
+        severity: 'warning',
+        message: 'Reported by application',
+      });
+      return { state: {} };
+    });
+
+    await expect(application.runIfDue()).resolves.toBe('completed');
+
+    expect(diagnostics.records('Asset')).toEqual([
+      expect.objectContaining({
+        sourceId: 'asset-1',
+        ownerScope: 'application:asset-1/application-1:application-calculation',
+        code: 'ASSET_CONDITION',
+      }),
+    ]);
   });
 });

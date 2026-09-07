@@ -13,10 +13,10 @@ This catalog defines the minimum observable behavior for `IMPLEMENTATION_PLAN.md
 
 - **CFG-01:** Explicit registry resolves an installed stable type ID.
 - **CFG-02:** Duplicate or unavailable plugin type IDs fail before Engine readiness.
-- **CFG-03:** Valid configuration receives plugin defaults without mutating raw input.
+- **CFG-03:** Valid configuration receives plugin, type, and concrete-entity settings without mutating raw input. Application-type defaults supply omitted Application intervals and provision mapped Datastreams; Device-type defaults provision declared Datastreams; application datafeed defaults override Device-type settings, shared application defaults aggregate by maximum buffer length/age and minimum expected interval, then explicit Device values override and final Datastream validation runs.
 - **CFG-04:** Missing required settings produce JSON-path errors.
-- **CFG-05:** Invalid intervals, buffer limits, or IDs are rejected.
-- **CFG-06:** Missing required datafeeds and unresolved Datastream mappings fail startup.
+- **CFG-05:** Invalid intervals and buffer limits are rejected while nonempty descriptive entity names, including spaces and separators, are accepted.
+- **CFG-06:** Missing required datafeeds and unresolved structured `{ device, datastream }` mappings fail startup.
 - **CFG-07:** Unknown configuration fields follow the schema's explicit reject/allow policy.
 
 ## Diagnostics
@@ -36,23 +36,23 @@ This catalog defines the minimum observable behavior for `IMPLEMENTATION_PLAN.md
 - **DS-02:** A sample with the same timestamp replaces the prior sample and does not increase length.
 - **DS-03:** Age and length pruning both apply, with the configured minimum practical buffer length.
 - **DS-04:** Inclusive range, last-value, and average queries return correct values/timestamps or `null`.
-- **DS-05:** Valid input updates timestamps, due time, buffer, persistence dirty state, and `entity.updated`.
+- **DS-05:** Valid input updates timestamps, due time, buffer, persistence dirty state, and `entity.updated`; restored due times are recalculated from the active interval and restored last-update time.
 - **DS-06:** Invalid/sentinel input sets `hwError` and its diagnostic without inserting a numeric sample.
-- **DS-07:** An empty buffer becomes stale only after startup grace and interval margin.
+- **DS-07:** An empty buffer becomes stale no earlier than its configurable startup grace period (default two expected intervals); an already-restored no-data condition remains active during that grace period.
 - **DS-08:** Fresh data clears `noDataError` and its diagnostic.
 - **DS-09:** Stale evaluation runs without incoming data or an Application request.
 
 ## Device, Application, and Asset
 
-- **DEV-01:** Device defaults are `hwError=false`, `error=false`, and a default timestamp.
-- **DEV-02:** Device `error` includes its own `hwError` and every child's `hwError/noDataError`.
-- **DEV-03:** Clearing the final source error clears Device `error` after recomputation.
+- **DEV-01:** Device defaults are `hwError=false`, `chldError=false`, `hasError=false`, and a default timestamp.
+- **DEV-02:** Device `chldError` includes every child Datastream `hasError`; `hasError` also includes own `hwError`.
+- **DEV-03:** Clearing the final source error clears Device `chldError` and `hasError` after recomputation.
 - **DEV-04:** Invalid payload diagnostics reconcile on the next successful parse.
-- **ASSET-01:** Empty Asset state is `currState=Undefined` and `error=false`.
+- **ASSET-01:** Empty Asset state is `currState=Undefined`, `chldError=false`, and `hasError=false`.
 - **ASSET-02:** Asset `currState` is the maximum direct Application `currState`.
-- **ASSET-03:** Asset `error` is true iff a child has `noDataError` or `appError`.
+- **ASSET-03:** Asset `chldError` and `hasError` are true iff a child Application `hasError` is true.
 - **APP-01:** A not-yet-due Application does not execute or mutate run timestamps.
-- **APP-02:** Every run first resets common state to `0/false/false` and refreshes required Datastream stale state.
+- **APP-02:** Every run first resets common state to `0/false/false`, refreshes required Datastream stale state, and exposes full immutable datafeed state, `sessionStartTs`, and the prior no-data condition to the evaluator.
 - **APP-03:** Successful execution atomically commits common and plugin-specific state.
 - **APP-04:** A thrown plugin leaves common state `currState=0`, `noDataError=false`, `appError=true`.
 - **APP-05:** A thrown plugin does not partially commit plugin state or clear plugin-owned diagnostics.
@@ -64,22 +64,23 @@ This catalog defines the minimum observable behavior for `IMPLEMENTATION_PLAN.md
 
 ## Engine and snapshots
 
-- **ENG-01:** Engine constructs all entities in dependency order with stable IDs.
+- **ENG-01:** Engine constructs all entities in dependency order with safe deterministic IDs derived from configured name paths and exposes names in entity metadata.
 - **ENG-02:** Duplicate entity IDs or unresolved mappings fail atomically.
 - **ENG-03:** Two Engine instances have isolated registries, buses, state, and timers.
 - **ENG-04:** Public registries/views cannot mutate live Engine objects.
 - **SNAP-01:** Entity snapshot is a deep serializable copy with identity, type, relationships, and state.
 - **SNAP-02:** Parent, children, and family requests return only the documented related entities.
-- **SNAP-03:** Whole-Engine snapshot includes every entity and active diagnostic category.
+- **SNAP-03:** Whole-Engine snapshot includes every entity and active diagnostic category, indexed by lowercase category/type and runtime/source ID.
 - **SNAP-04:** Projection returns requested dotted paths.
 - **SNAP-05:** Non-strict projection omits absent paths and reports entity/path pairs in `missingPaths`.
 - **SNAP-06:** Strict projection fails atomically when any path is absent.
+- **SNAP-07:** `entities` and `diagnostics` support optional type and ID filters; an ID requires a type, and diagnostics rejects entity-view options.
 
 ## Persistence and lifecycle
 
 - **STATE-02:** Valid versioned entity state and condition diagnostics survive restart.
 - **STATE-03:** Empty/deleted storage performs a supported cold start from defaults.
-- **STATE-04:** Obsolete entity state is removed only after successful configuration construction.
+- **STATE-04:** Obsolete entity state and condition diagnostics for removed entities are removed only after successful configuration construction.
 - **STATE-05:** Persisted data contains no functions, timers, class instances, or readiness flag.
 - **STATE-06:** Supported schema/plugin migrations transform state deterministically.
 - **STATE-07:** Malformed/unmigratable state falls back to defaults and raises a diagnostic.
@@ -100,7 +101,7 @@ This catalog defines the minimum observable behavior for `IMPLEMENTATION_PLAN.md
 - **SCHED-02:** A Datastream may become stale before any Application is due.
 - **SCHED-03:** One stale-task failure does not stop later stale tasks.
 - **SCHED-04:** Stale scheduler timers are rescheduled and cleaned up correctly.
-- **SCHED-05:** An overdue Application runs once and sets next due from the current run time.
+- **SCHED-05:** An overdue Application runs once and sets next due from the current run time; restored scheduling uses the current configured interval rather than a persisted next-due timestamp.
 - **SCHED-06:** Missed historical intervals are not replayed after restart.
 - **SCHED-07:** One Application failure does not stop later Applications.
 - **SCHED-08:** The same Application never overlaps; the selected skip/coalesce policy is deterministic.
@@ -114,14 +115,14 @@ This catalog defines the minimum observable behavior for `IMPLEMENTATION_PLAN.md
 
 - **PLUG-DEV-01:** Enless manifest exposes stable ID, schema, defaults, and required `temp1/temp2` Datastreams.
 - **PLUG-DEV-02:** Valid sensor type 12 payload updates both available temperature streams.
-- **PLUG-DEV-03:** Values outside `[-100, 400]` set hardware fault and `SENSOR_BROKEN` without insertion.
-- **PLUG-DEV-04:** A later valid value clears that scoped condition.
+- **PLUG-DEV-03:** Consecutive values outside `[-100, 400]` raise hardware fault and `SENSOR_BROKEN` without insertion only at the configured `numFaultyValues` threshold (default three).
+- **PLUG-DEV-04:** A later valid value resets the faulty-value count and clears that scoped condition.
 - **PLUG-DEV-05:** Malformed/wrong-sensor payload reports invalid input without partial updates.
 - **PLUG-APP-01:** Application manifest exposes required feeds/settings and stable defaults.
-- **PLUG-APP-02:** Missing averages remain Undefined during grace, then set `noDataError` and `NO_DATA`.
+- **PLUG-APP-02:** Missing averages remain Undefined until `windowSizeMs` has elapsed from the session start, then set `noDataError` and `NO_DATA`.
 - **PLUG-APP-03:** `tempOutAvg - tempInAvg` above margin sets `appError` and its diagnostic.
 - **PLUG-APP-04:** Input below off threshold sets `operState=Off` and leaves process state Undefined.
-- **PLUG-APP-05:** On-state with excessive temperature difference sets Warning and `FAILED_CLOSED`.
+- **PLUG-APP-05:** On-state with excessive temperature difference sets Warning and reports `FAILED_CLOSED` on the parent Asset through the scoped parent reporter.
 - **PLUG-APP-06:** Healthy on-state sets Ok and clears prior condition diagnostics automatically.
 - **PLUG-APP-07:** Average values and timestamps use the configured inclusive window.
 - **PLUG-APP-08:** Plugin uses scoped reporting and has no null-filled diagnostic payload.
@@ -132,17 +133,17 @@ This catalog defines the minimum observable behavior for `IMPLEMENTATION_PLAN.md
 ## Node-RED adapters
 
 - **NR-01:** Node-RED 3.0.2 discovers all four node types from package metadata.
-- **NR-02:** Engine config node creates one Engine and exposes it to referencing nodes.
+- **NR-02:** Engine config node creates one Engine using its immutable Node-RED config ID as the persistence identity and exposes it to referencing nodes.
 - **NR-03:** Invalid configuration reports status/error and never becomes ready.
 - **NR-04:** `ieps` context adapter reads/writes the selected named store.
-- **NR-05:** Missing selected context store fails clearly.
-- **NR-06:** Config-node close awaits Engine shutdown and calls the Node-RED close callback once.
-- **NR-07:** UG6x Input reads top-level `deviceName` and ISO `gatewayTime`.
-- **NR-08:** Valid time becomes epoch milliseconds while raw payload remains available to the plugin.
-- **NR-09:** Missing/invalid time uses `receivedTs` and produces the Engine-owned Device diagnostic.
-- **NR-10:** Unknown/missing device produces Engine-owned Common diagnostics and no plugin parse.
-- **NR-11:** Input while not ready follows the configured queue/reject policy.
-- **NR-12:** Expected rejection is diagnostic state; unexpected adapter failure calls `done(error)`.
+- **NR-05:** A blank or unavailable configured context store falls back to Node-RED's default store, emits a node warning, shows a yellow ready status, and still initializes the Engine.
+- **NR-06:** Config-node close awaits Engine shutdown and calls the Node-RED close callback once; config-node removal then deletes only that Engine's persisted namespace.
+- **NR-07:** Engine Input validates the `msg.payload` `{ deviceName, rawPayload, timestamp }` contract and forwards a transport-neutral ingestion envelope.
+- **NR-08:** Missing or invalid payload fields become envelope issues; the Engine rejects them before Device parsing and raises an Engine-owned Common diagnostic observable through Engine Message Receiver.
+- **NR-09:** Engine Input has zero outputs and never relays an input message; its status reports accepted or rejected ingestion.
+- **NR-10:** Input while not ready follows the configured queue/reject policy.
+- **NR-11:** Expected Engine rejection is diagnostic state; unexpected adapter failure calls `done(error)`.
+- **NR-12:** The Engine derives parser receipt time from its injected clock while using the validated envelope timestamp as the Datastream sample time.
 - **NR-13:** Receiver filters exact and wildcard event patterns through one output.
 - **NR-14:** Receiver output contains only serializable event envelopes and no state/live instances.
 - **NR-15:** Multiple Receivers subscribe independently without sharing delivery buffers.
@@ -159,6 +160,8 @@ This catalog defines the minimum observable behavior for `IMPLEMENTATION_PLAN.md
 - **NR-26:** Non-strict missing paths appear in `missingPaths`; strict mode calls `done(error)` with no output.
 - **NR-27:** Missing entity or malformed request calls `done(error)` without Engine mutation.
 - **NR-28:** `engine.ready` can trigger a whole-Engine initialization snapshot.
+- **NR-29:** Every published Node-RED node provides built-in editor help, and the Insight Engine editor starts with full, partial, and default-driven configuration examples.
+- **NR-30:** Dynamic Snapshot requests support diagnostic filtering and reject an ID filter without a type/category.
 
 ## End-to-end and packaging
 

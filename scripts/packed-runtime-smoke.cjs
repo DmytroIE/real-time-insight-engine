@@ -11,15 +11,16 @@ const {
   EntityKind,
   InMemoryStateStore,
   ProcessState,
+  asEngineId,
 } = require('@sxs/industrial-core');
 const { createUg65ExamplePluginRegistry } = require('@sxs/deployment-ug65-example');
-const { normalizeUg6xInput } = require('node-red-contrib-sxs-industrial');
+const { normalizeEngineInput } = require('node-red-contrib-sxs-industrial');
 
 const expectedNodeTypes = [
+  'engine-input',
   'engine-message-receiver',
   'engine-state-snapshot',
-  'industrial-engine',
-  'ug6x-input',
+  'insight-engine',
 ];
 
 const noOpTimers = {
@@ -55,7 +56,10 @@ const main = async () => {
     const settingsPath = path.join(path.dirname(profileEntry), '..', 'settings.example.json');
     const rawConfiguration = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
     const plugins = createUg65ExamplePluginRegistry();
-    const configuration = new ConfigurationBuilder(plugins).build(rawConfiguration);
+    const configuration = new ConfigurationBuilder(plugins).build(
+      rawConfiguration,
+      asEngineId('packed-runtime'),
+    );
     const clock = {
       wallTimeMs: () => 600_000,
       monotonicTimeMs: () => 0,
@@ -68,11 +72,13 @@ const main = async () => {
     });
 
     const message = {
-      deviceName: 'enless-twin-temp-1',
-      gatewayTime: new Date(clock.wallTimeMs()).toISOString(),
-      object: { sensorType: 12, temp1: 100, temp2: 90 },
+      payload: {
+        deviceName: 'enless-twin-temp-1',
+        rawPayload: { sensorType: 12, temp1: 100, temp2: 90 },
+        timestamp: clock.wallTimeMs(),
+      },
     };
-    assert.equal(await engine.ingest(normalizeUg6xInput(message, clock.wallTimeMs())), true);
+    assert.equal(await engine.ingest(normalizeEngineInput(message)), true);
     assert.equal(await engine.runApplication('steam-trap-1/failed-closed'), 'completed');
 
     const snapshot = engine.snapshot({ target: { scope: 'all' } });

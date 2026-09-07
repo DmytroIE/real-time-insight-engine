@@ -4,6 +4,23 @@ export interface DatastreamConfiguration {
   readonly maxBufferLength: number;
   readonly maxBufferAgeMs: number;
   readonly expectedIntervalMs: number;
+  readonly gracePeriodCoefficient?: number;
+}
+
+export interface DatafeedReference {
+  readonly device: string;
+  readonly datastream: string;
+}
+
+export interface ApplicationConfigurationDefaults {
+  readonly runIntervalMs?: number;
+  readonly settings?: unknown;
+  readonly datafeedDatastreams?: Readonly<Record<string, Partial<DatastreamConfiguration>>>;
+}
+
+export interface DeviceConfigurationDefaults {
+  readonly settings?: unknown;
+  readonly datastreams?: Readonly<Record<string, Partial<DatastreamConfiguration>>>;
 }
 
 export interface DeviceConfiguration {
@@ -17,16 +34,23 @@ export interface ApplicationConfiguration {
   readonly type: PluginTypeId;
   readonly runIntervalMs: number;
   readonly settings?: unknown;
-  readonly datafeeds: Readonly<Record<string, string>>;
+  readonly datafeeds: Readonly<Record<string, DatafeedReference | string>>;
 }
 
 export interface AssetConfiguration {
   readonly applications: readonly ApplicationConfiguration[];
 }
 
+export const applicationConfigurationEntries = (
+  asset: AssetConfiguration,
+): readonly [string, ApplicationConfiguration][] =>
+  asset.applications.map((application) => [application.id, application]);
+
 export interface EngineConfiguration {
   readonly engineId: EngineId;
   readonly clockJumpThresholdMs?: number;
+  readonly applicationDefaults?: Readonly<Record<PluginTypeId, ApplicationConfigurationDefaults>>;
+  readonly deviceDefaults?: Readonly<Record<PluginTypeId, DeviceConfigurationDefaults>>;
   readonly devices: Readonly<Record<string, DeviceConfiguration>>;
   readonly assets: Readonly<Record<string, AssetConfiguration>>;
 }

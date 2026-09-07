@@ -1,5 +1,4 @@
 import {
-  asDeviceId,
   type Engine,
   type EngineIngestInput,
   type EngineIngestIssue,
@@ -8,58 +7,49 @@ import {
 import type { Node, NodeAPI, NodeDef, NodeMessage, NodeMessageInFlow } from 'node-red';
 
 import type { IndustrialEngineNode } from './industrial-engine';
-import { UG6X_INPUT_NODE_TYPE } from './node-types';
+import { ENGINE_INPUT_NODE_TYPE } from './node-types';
 
 export type ReadinessPolicy = 'reject' | 'queue';
 
-export interface Ug6xInputNodeConfiguration extends NodeDef {
+export interface EngineInputNodeConfiguration extends NodeDef {
   readonly engine: string;
   readonly readinessPolicy?: ReadinessPolicy;
-}
-
-export interface Ug6xInputNodeRegistrationOptions {
-  readonly now?: () => number;
 }
 
 type Send = (msg: NodeMessage | Array<NodeMessage | NodeMessage[] | null>) => void;
 type Done = (error?: Error) => void;
 
-const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
 
-export const normalizeUg6xInput = (
-  msg: NodeMessageInFlow,
-  receivedTimestamp: number,
-): EngineIngestInput => {
+export const normalizeEngineInput = (msg: NodeMessageInFlow): EngineIngestInput => {
   const issues: EngineIngestIssue[] = [];
-  const deviceName =
-    typeof msg['deviceName'] === 'string' && msg['deviceName'].trim() !== ''
-      ? msg['deviceName']
-      : undefined;
-  if (deviceName === undefined) {
-    issues.push('NO_DEVICE_NAME');
+  const payload = msg.payload;
+  if (!isRecord(payload)) {
+    return {
+      source: 'engine-input',
+      issues: ['INVALID_RAW_PAYLOAD'],
+    };
   }
 
-  const gatewayTime = msg['gatewayTime'];
-  let sourceTimestamp = receivedTimestamp;
-  if (gatewayTime === undefined || gatewayTime === null || gatewayTime === '') {
-    issues.push('NO_GATEWAY_TIME');
-  } else if (typeof gatewayTime === 'string' && ISO_TIMESTAMP.test(gatewayTime)) {
-    const parsed = Date.parse(gatewayTime);
-    if (Number.isFinite(parsed)) {
-      sourceTimestamp = parsed;
-    } else {
-      issues.push('INVALID_GATEWAY_TIME');
-    }
-  } else {
-    issues.push('INVALID_GATEWAY_TIME');
+  const deviceName = payload['deviceName'];
+  if (typeof deviceName !== 'string' || deviceName.trim() === '') {
+    issues.push('INVALID_DEVICE_NAME');
+  }
+  const rawPayload = payload['rawPayload'];
+  if (!isRecord(rawPayload)) {
+    issues.push('INVALID_RAW_PAYLOAD');
+  }
+  const timestamp = payload['timestamp'];
+  if (typeof timestamp !== 'number' || !Number.isFinite(timestamp)) {
+    issues.push('INVALID_TIMESTAMP');
   }
 
   return {
-    ...(deviceName === undefined ? {} : { deviceId: asDeviceId(deviceName) }),
-    rawPayload: msg,
-    sourceTimestamp,
-    receivedTimestamp,
-    source: 'ug6x',
+    ...(typeof deviceName === 'string' && deviceName.trim() !== '' ? { deviceName } : {}),
+    ...(isRecord(rawPayload) ? { rawPayload } : {}),
+    ...(typeof timestamp === 'number' && Number.isFinite(timestamp) ? { timestamp } : {}),
+    source: 'engine-input',
     issues,
   };
 };
@@ -96,14 +86,13 @@ const waitUntilReady = async (engineNode: IndustrialEngineNode): Promise<Engine>
   });
 };
 
-export const createUg6xInputHandler =
+export const createEngineInputHandler =
   (
     node: Node,
     engineNode: IndustrialEngineNode | undefined,
     readinessPolicy: ReadinessPolicy,
-    now: () => number = Date.now,
-  ): ((msg: NodeMessageInFlow, send: Send, done: Done) => void) =>
-  (msg, send, done) => {
+  ): ((msg: NodeMessageInFlow, _send: Send, done: Done) => void) =>
+  (msg, _send, done) => {
     void (async () => {
       if (engineNode === undefined) {
         throw new Error('Configured Industrial Engine node is unavailable');
@@ -118,13 +107,12 @@ export const createUg6xInputHandler =
         engine = await waitUntilReady(engineNode);
       }
 
-      const accepted = await engine.ingest(normalizeUg6xInput(msg, now()));
-      if (accepted) {
-        node.status({ fill: 'green', shape: 'dot', text: 'input accepted' });
-        send(msg);
-      } else {
-        node.status({ fill: 'yellow', shape: 'ring', text: 'input rejected' });
-      }
+      const accepted = await engine.ingest(normalizeEngineInput(msg));
+      node.status(
+        accepted
+          ? { fill: 'green', shape: 'dot', text: 'input accepted' }
+          : { fill: 'yellow', shape: 'ring', text: 'input rejected' },
+      );
       done();
     })().catch((error: unknown) => {
       const failure = error instanceof Error ? error : new Error(String(error));
@@ -133,23 +121,15 @@ export const createUg6xInputHandler =
     });
   };
 
-export const registerUg6xInputNode = (
-  RED: NodeAPI,
-  options: Ug6xInputNodeRegistrationOptions = {},
-): void => {
-  function Ug6xInputNode(this: Node, config: Ug6xInputNodeConfiguration): void {
+export const registerEngineInputNode = (RED: NodeAPI): void => {
+  function EngineInputNode(this: Node, config: EngineInputNodeConfiguration): void {
     RED.nodes.createNode(this, config);
     const engineNode = RED.nodes.getNode(config.engine) as IndustrialEngineNode | null;
     this.on(
       'input',
-      createUg6xInputHandler(
-        this,
-        engineNode ?? undefined,
-        config.readinessPolicy ?? 'reject',
-        options.now,
-      ),
+      createEngineInputHandler(this, engineNode ?? undefined, config.readinessPolicy ?? 'reject'),
     );
   }
 
-  RED.nodes.registerType(UG6X_INPUT_NODE_TYPE, Ug6xInputNode);
+  RED.nodes.registerType(ENGINE_INPUT_NODE_TYPE, EngineInputNode);
 };

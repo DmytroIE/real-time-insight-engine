@@ -85,11 +85,12 @@ const belongsToScope = (diagnostic: Diagnostic, scope: DiagnosticScopeIdentity):
 
 export class DiagnosticEvaluationScope implements DiagnosticReporter {
   readonly #reports = new Map<string, DiagnosticReportInput>();
+  readonly #reconcile: (reports: readonly DiagnosticReportInput[]) => void;
   #active = true;
 
-  public constructor(
-    private readonly reconcile: (reports: readonly DiagnosticReportInput[]) => void,
-  ) {}
+  public constructor(reconcile: (reports: readonly DiagnosticReportInput[]) => void) {
+    this.#reconcile = reconcile;
+  }
 
   public report(input: DiagnosticReportInput): void {
     this.ensureActive();
@@ -99,7 +100,7 @@ export class DiagnosticEvaluationScope implements DiagnosticReporter {
   public complete(): void {
     this.ensureActive();
     this.#active = false;
-    this.reconcile([...this.#reports.values()]);
+    this.#reconcile([...this.#reports.values()]);
     this.#reports.clear();
   }
 
@@ -120,13 +121,19 @@ export class DiagnosticEvaluationScope implements DiagnosticReporter {
 
 export class DiagnosticRegistry {
   readonly #records = new Map<string, Diagnostic>();
+  readonly #clock: Clock;
+  readonly #eventSink: EventSink;
+  readonly #onChange: () => void;
 
   public constructor(
-    private readonly clock: Clock,
-    private readonly eventSink: EventSink,
+    clock: Clock,
+    eventSink: EventSink,
     restored: readonly PersistedDiagnostic[] = [],
-    private readonly onChange: () => void = () => undefined,
+    onChange: () => void = () => undefined,
   ) {
+    this.#clock = clock;
+    this.#eventSink = eventSink;
+    this.#onChange = onChange;
     for (const diagnostic of restored) {
       if (diagnostic.retention === 'condition') {
         this.#records.set(diagnosticKey(diagnostic), clone(diagnostic));
@@ -137,7 +144,7 @@ export class DiagnosticRegistry {
   public observe(observation: DiagnosticObservation): Diagnostic {
     const key = diagnosticKey(observation);
     const previous = this.#records.get(key);
-    const now = this.clock.wallTimeMs();
+    const now = this.#clock.wallTimeMs();
 
     if (previous === undefined) {
       const diagnostic: Diagnostic = {
@@ -149,7 +156,7 @@ export class DiagnosticRegistry {
       };
       this.#records.set(key, diagnostic);
       if (diagnostic.retention === 'condition') {
-        this.onChange();
+        this.#onChange();
       }
       this.publish(
         diagnostic.retention === 'condition' ? 'diagnostic.raised' : 'diagnostic.notified',
@@ -168,7 +175,7 @@ export class DiagnosticRegistry {
     };
     this.#records.set(key, diagnostic);
     if (previous.retention === 'condition' || diagnostic.retention === 'condition') {
-      this.onChange();
+      this.#onChange();
     }
     if (materialChange) {
       this.publish(
@@ -207,7 +214,7 @@ export class DiagnosticRegistry {
 
     this.#records.delete(key);
     if (diagnostic.retention === 'condition') {
-      this.onChange();
+      this.#onChange();
     }
     this.publish('diagnostic.cleared', diagnostic);
     return true;
@@ -227,6 +234,14 @@ export class DiagnosticRegistry {
   public clearAll(): void {
     for (const diagnostic of [...this.#records.values()]) {
       this.clear(diagnostic);
+    }
+  }
+
+  public clearMatching(predicate: (diagnostic: Diagnostic) => boolean): void {
+    for (const diagnostic of [...this.#records.values()]) {
+      if (predicate(diagnostic)) {
+        this.clear(diagnostic);
+      }
     }
   }
 
@@ -257,9 +272,9 @@ export class DiagnosticRegistry {
     type: 'diagnostic.raised' | 'diagnostic.updated' | 'diagnostic.cleared' | 'diagnostic.notified',
     diagnostic: Diagnostic,
   ): void {
-    this.eventSink.publish({
+    this.#eventSink.publish({
       type,
-      timestamp: this.clock.wallTimeMs(),
+      timestamp: this.#clock.wallTimeMs(),
       source: clone(diagnostic.source),
       data: eventData(diagnostic),
     });

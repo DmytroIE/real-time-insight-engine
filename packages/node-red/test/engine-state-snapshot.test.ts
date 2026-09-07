@@ -23,7 +23,11 @@ interface Invocation {
   readonly sent: NodeMessage[];
 }
 
-const emptyResponse = (): EngineSnapshotResponse => ({ entities: [], missingPaths: [] });
+const emptyResponse = (): EngineSnapshotResponse => ({
+  entities: { device: {}, datastream: {}, application: {}, asset: {} },
+  diagnostics: { common: {}, device: {}, datastream: {}, application: {}, asset: {} },
+  missingPaths: [],
+});
 const testNode = () => ({ status: vi.fn() }) as unknown as Pick<Node, 'status'>;
 const engineNode = (engine: Engine): IndustrialEngineNode =>
   ({ engine, ready: Promise.resolve(engine) }) as IndustrialEngineNode;
@@ -81,7 +85,7 @@ describe('Engine State Snapshot', () => {
     const engine = { snapshot } as unknown as Engine;
     const configured = JSON.stringify({
       target: {
-        scope: 'entity',
+        scope: 'entities',
         entityType: EntityKind.Device,
         entityId: 'device-1',
       },
@@ -93,7 +97,7 @@ describe('Engine State Snapshot', () => {
     expect(snapshot).toHaveBeenCalledWith(
       {
         target: {
-          scope: 'entity',
+          scope: 'entities',
           entityType: EntityKind.Device,
           entityId: 'device-1',
         },
@@ -131,8 +135,8 @@ describe('Engine State Snapshot', () => {
   });
 
   it.each([
-    [{ scope: 'entity', entityType: EntityKind.Asset, entityId: 'asset-1' }, 'self'],
-    [{ scope: 'entity', entityType: EntityKind.Device, entityId: 'device-1' }, 'family'],
+    [{ scope: 'entities', entityType: EntityKind.Asset, entityId: 'asset-1' }, 'self'],
+    [{ scope: 'entities', entityType: EntityKind.Device, entityId: 'device-1' }, 'family'],
     [{ scope: 'all' }, undefined],
   ] as const)('NR-25 forwards %s targets and attaches their result', async (target, relations) => {
     const response = emptyResponse();
@@ -161,7 +165,11 @@ describe('Engine State Snapshot', () => {
       if (request.strictPaths) {
         throw new SnapshotPathError(missingPaths);
       }
-      return { entities: [], missingPaths };
+      return {
+        entities: { device: {}, datastream: {}, application: {}, asset: {} },
+        diagnostics: { common: {}, device: {}, datastream: {}, application: {}, asset: {} },
+        missingPaths,
+      };
     });
     const engine = { snapshot } as unknown as Engine;
     const nonStrictMessage: NodeMessageInFlow = { _msgid: 'non-strict' };
@@ -172,7 +180,11 @@ describe('Engine State Snapshot', () => {
     );
 
     await expect(nonStrict.done).resolves.toBeUndefined();
-    expect(nonStrictMessage['snapshot']).toEqual({ entities: [], missingPaths });
+    expect(nonStrictMessage['snapshot']).toEqual({
+      entities: { device: {}, datastream: {}, application: {}, asset: {} },
+      diagnostics: { common: {}, device: {}, datastream: {}, application: {}, asset: {} },
+      missingPaths,
+    });
 
     const strictMessage: NodeMessageInFlow = { _msgid: 'strict' };
     const strict = invoke(
@@ -198,7 +210,7 @@ describe('Engine State Snapshot', () => {
     const missing = invoke(
       engine,
       {
-        target: { scope: 'entity', entityType: EntityKind.Device, entityId: 'missing' },
+        target: { scope: 'entities', entityType: EntityKind.Device, entityId: 'missing' },
       },
       missingMessage,
     );
@@ -218,8 +230,42 @@ describe('Engine State Snapshot', () => {
     expect(malformedMessage).not.toHaveProperty('snapshot');
   });
 
+  it('NR-30 supports diagnostics filters and rejects an entityId without entityType', async () => {
+    const snapshot = vi.fn(() => emptyResponse());
+    const engine = { snapshot } as unknown as Engine;
+    const diagnosticRequest = {
+      target: {
+        scope: 'diagnostics' as const,
+        entityType: EntityKind.Datastream,
+        entityId: 'device-1/temp1',
+      },
+    };
+    const valid = invoke(
+      engine,
+      { target: { scope: 'all' } },
+      {
+        _msgid: 'diagnostics',
+        snapshotRequest: diagnosticRequest,
+      },
+    );
+
+    await expect(valid.done).resolves.toBeUndefined();
+    expect(snapshot).toHaveBeenCalledWith(diagnosticRequest, undefined);
+
+    const invalid = invoke(
+      engine,
+      { target: { scope: 'all' } },
+      {
+        _msgid: 'missing-type',
+        snapshotRequest: { target: { scope: 'entities', entityId: 'device-1' } },
+      },
+    );
+    await expect(invalid.done).resolves.toBeInstanceOf(SnapshotRequestError);
+    expect(invalid.sent).toEqual([]);
+  });
+
   it('NR-28 uses engine.ready to trigger a whole-Engine initialization snapshot', async () => {
-    const response = { ...emptyResponse(), diagnostics: {} } as EngineSnapshotResponse;
+    const response = emptyResponse();
     const snapshot = vi.fn(() => response);
     const engine = { snapshot } as unknown as Engine;
     const msg: NodeMessageInFlow = {

@@ -1,18 +1,129 @@
 <script type="text/javascript">
-  RED.nodes.registerType('industrial-engine', {
+  const defaultConfiguration = {
+    applicationDefaults: {
+      'sxs.twin-temp-failed-closed': {
+        runIntervalMs: 600000,
+        settings: {
+          tempDiffMargin: 0.5,
+          offThreshold: 80,
+          tempDiffThreshold: 30,
+          windowSizeMs: 1800000,
+        },
+        datafeedDatastreams: {
+          tempIn: {
+            maxBufferLength: 5,
+            maxBufferAgeMs: 1800000,
+            expectedIntervalMs: 600000,
+            gracePeriodCoefficient: 2,
+          },
+          tempOut: {
+            maxBufferLength: 5,
+            maxBufferAgeMs: 1800000,
+            expectedIntervalMs: 600000,
+            gracePeriodCoefficient: 2,
+          },
+        },
+      },
+    },
+    deviceDefaults: {
+      'sxs.enless-twin-temp': {
+        settings: { numFaultyValues: 3 },
+        datastreams: {
+          temp1: {
+            maxBufferLength: 8,
+            maxBufferAgeMs: 600000,
+            expectedIntervalMs: 100000,
+          },
+          temp2: {
+            maxBufferLength: 8,
+            maxBufferAgeMs: 600000,
+            expectedIntervalMs: 100000,
+          },
+        },
+      },
+    },
+    devices: {
+      'Device 1 - full': {
+        type: 'sxs.enless-twin-temp',
+        datastreams: {
+          temp1: {
+            maxBufferLength: 6,
+            maxBufferAgeMs: 60000,
+            expectedIntervalMs: 10000,
+          },
+          temp2: {
+            maxBufferLength: 6,
+            maxBufferAgeMs: 60000,
+            expectedIntervalMs: 10000,
+          },
+        },
+      },
+      'Device 2 - partial': {
+        type: 'sxs.enless-twin-temp',
+        settings: { numFaultyValues: 5 },
+        datastreams: { temp1: { maxBufferLength: 9 } },
+      },
+      'Device 3 - defaults': { type: 'sxs.enless-twin-temp' },
+    },
+    assets: {
+      'Trap 1 - full': {
+        applications: {
+          'Failed closed - full': {
+            type: 'sxs.twin-temp-failed-closed',
+            runIntervalMs: 120000,
+            settings: {
+              tempDiffMargin: 0.4,
+              offThreshold: 70,
+              tempDiffThreshold: 40,
+              windowSizeMs: 180000,
+            },
+            datafeeds: {
+              tempIn: { device: 'Device 1 - full', datastream: 'temp1' },
+              tempOut: { device: 'Device 1 - full', datastream: 'temp2' },
+            },
+          },
+        },
+      },
+      'Trap 2 - partial': {
+        applications: {
+          'Failed closed - partial': {
+            type: 'sxs.twin-temp-failed-closed',
+            settings: { tempDiffMargin: 0.4 },
+            datafeeds: {
+              tempIn: { device: 'Device 2 - partial', datastream: 'temp1' },
+              tempOut: { device: 'Device 2 - partial', datastream: 'temp2' },
+            },
+          },
+        },
+      },
+      'Trap 3 - defaults': {
+        applications: {
+          'Failed closed - defaults': {
+            type: 'sxs.twin-temp-failed-closed',
+            datafeeds: {
+              tempIn: { device: 'Device 3 - defaults', datastream: 'temp1' },
+              tempOut: { device: 'Device 3 - defaults', datastream: 'temp2' },
+            },
+          },
+        },
+      },
+    },
+  };
+
+  RED.nodes.registerType('insight-engine', {
     category: 'config',
     defaults: {
       name: { value: '' },
-      contextStore: { value: 'ieps', required: true },
-      configuration: { value: '', required: true },
+      contextStore: { value: 'ieps' },
+      configuration: { value: JSON.stringify(defaultConfiguration, null, 2), required: true },
     },
     label: function () {
-      return this.name || 'Industrial Engine';
+      return this.name || 'Insight Engine';
     },
   });
 </script>
 
-<script type="text/html" data-template-name="industrial-engine">
+<script type="text/html" data-template-name="insight-engine">
   <div class="form-row">
     <label for="node-config-input-name">Name</label>
     <input type="text" id="node-config-input-name" />
@@ -25,4 +136,55 @@
     <label for="node-config-input-configuration">Configuration</label>
     <textarea id="node-config-input-configuration" rows="16"></textarea>
   </div>
+</script>
+
+<script type="text/x-red" data-help-name="insight-engine">
+  <p>Creates and owns the shared Insight Engine.</p>
+  <p>
+    Other SXS Industrial nodes select this Insight Engine. It validates the configuration, creates
+    Devices, Datastreams, Assets, and Applications, runs their schedules, publishes events, and
+    saves state in the selected Node-RED Context store.
+  </p>
+  <p><strong>Configuration</strong></p>
+  <p>
+    Configuration is JSON. The built-in template shows a full Device/Application, a partial one,
+    and one that uses defaults. Change its names, plugin types, settings, and datafeed mappings
+    for the installed plugins.
+  </p>
+  <ul>
+    <li><code>devices</code> and <code>assets</code> are required objects.</li>
+    <li>Each Device needs <code>type</code>. Its <code>settings</code> and <code>datastreams</code> are optional.</li>
+    <li>Each Asset needs <code>applications</code>.</li>
+    <li>Each Application needs <code>type</code> and <code>datafeeds</code>. It may omit <code>settings</code> when its plugin has defaults.</li>
+    <li>Each datafeed maps a plugin datafeed name to a configured <code>device</code> and <code>datastream</code>.</li>
+  </ul>
+  <p>
+    <code>applicationDefaults</code> is optional. It provides a default
+    <code>runIntervalMs</code>, partial plugin <code>settings</code>, and partial
+    <code>datafeedDatastreams</code> settings for an Application type. An Application may omit
+    <code>runIntervalMs</code> only when its type has that default.
+  </p>
+  <p>
+    <code>deviceDefaults</code> is optional. It provides partial plugin <code>settings</code>
+    and partial <code>datastreams</code> settings for a Device type. Plugin settings merge from
+    manifest defaults, type defaults, then the concrete Device or Application settings.
+  </p>
+  <p>
+    Device-type Datastream settings provision declared streams. Application datafeed settings
+    override them; when several Applications use one Datastream, their defaults use the largest
+    buffer length, largest buffer age, smallest expected interval, and largest grace coefficient.
+    <code>gracePeriodCoefficient</code> is optional, defaults to <code>2</code>, and delays an
+    empty Datastream <code>NO_DATA</code> alarm until at least that many expected intervals have
+    elapsed after Engine startup. Explicit Device Datastream settings win. The final settings
+    must include buffer length, buffer age, and expected interval.
+  </p>
+  <p>
+    Device, Asset, Datastream, and Application names are object keys. They may contain spaces,
+    slashes, and Unicode characters. Use those same names in datafeed mappings.
+  </p>
+  <p>
+    <b>Context store</b> selects where Engine state is saved. Use a persistent
+    <code>localfilesystem</code> store for restart recovery. An empty or unavailable store falls
+    back to the Node-RED default store with a warning.
+  </p>
 </script>

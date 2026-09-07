@@ -12,6 +12,7 @@ import {
   PluginRegistry,
   ProcessState,
   asApplicationId,
+  asEngineId,
   type ApplicationEvaluationContext,
   type ApplicationEvaluator,
   type ApplicationPlugin,
@@ -31,7 +32,7 @@ import { enlessTwinTemperatureDevicePlugin } from '@sxs/device-enless-twin-temp'
 import {
   createEngineMessageReceiver,
   createEngineStateSnapshotHandler,
-  createUg6xInputHandler,
+  createEngineInputHandler,
   type IndustrialEngineNode,
 } from 'node-red-contrib-sxs-industrial';
 import type { Node, NodeMessage, NodeMessageInFlow } from 'node-red';
@@ -96,7 +97,10 @@ const loadConfiguration = (): EngineConfiguration => {
     readFileSync(join(__dirname, '..', 'settings.example.json'), 'utf8'),
   ) as Record<string, unknown>;
   raw['clockJumpThresholdMs'] = 100;
-  return new ConfigurationBuilder(createUg65ExamplePluginRegistry()).build(raw);
+  return new ConfigurationBuilder(createUg65ExamplePluginRegistry()).build(
+    raw,
+    asEngineId('ug65-example'),
+  );
 };
 
 const createHarness = async (
@@ -150,32 +154,24 @@ const invokeInput = async (
   engine: Engine,
   clock: TestClock,
   object: Readonly<Record<string, unknown>>,
-): Promise<{ readonly sent: NodeMessage[]; readonly error?: Error }> => {
-  const sent: NodeMessage[] = [];
+): Promise<{ readonly error?: Error }> => {
   const node = { status: vi.fn() } as unknown as Node;
   const message: NodeMessageInFlow = {
     _msgid: `input-${clock.wallMs}`,
-    deviceName: 'enless-twin-temp-1',
-    gatewayTime: new Date(clock.wallMs).toISOString(),
-    object,
+    payload: {
+      deviceName: 'enless-twin-temp-1',
+      rawPayload: object,
+      timestamp: clock.wallMs,
+    },
   };
   const error = await new Promise<Error | undefined>((resolve) => {
-    createUg6xInputHandler(
-      node,
-      industrialNode(engine),
-      'reject',
-      () => clock.wallMs,
-    )(
+    createEngineInputHandler(node, industrialNode(engine), 'reject')(
       message,
-      (output) => {
-        if (!Array.isArray(output)) {
-          sent.push(output);
-        }
-      },
+      () => undefined,
       resolve,
     );
   });
-  return { sent, ...(error === undefined ? {} : { error }) };
+  return error === undefined ? {} : { error };
 };
 
 const invokeSnapshot = async (
@@ -207,7 +203,11 @@ const invokeSnapshot = async (
 const applicationId = asApplicationId('steam-trap-1/failed-closed');
 const allSnapshot = (engine: Engine) => engine.snapshot({ target: { scope: 'all' } });
 const entity = (engine: Engine, entityType: EntityKind) =>
-  allSnapshot(engine).entities.find((candidate) => candidate.entityType === entityType);
+  Object.values(allSnapshot(engine).entities[entityType])[0];
+const diagnostics = (
+  engine: Engine,
+  entityType: 'common' | 'device' | 'datastream' | 'application' | 'asset',
+) => Object.values(allSnapshot(engine).diagnostics[entityType]).flat();
 
 describe('UG65 end-to-end smoke flows', () => {
   it('E2E-01 cold startup closes then opens readiness and initializes consumers', async () => {
@@ -229,12 +229,16 @@ describe('UG65 end-to-end smoke flows', () => {
       topic: 'engine.ready',
       event: lifecycle[2],
     });
-    expect(initialized['snapshot']).toMatchObject({ entities: expect.any(Array) });
-    expect((initialized['snapshot'] as { entities: unknown[] }).entities).toHaveLength(5);
+    expect(initialized['snapshot']).toMatchObject({ entities: expect.any(Object) });
+    expect(
+      Object.values((initialized['snapshot'] as ReturnType<typeof allSnapshot>).entities).flatMap(
+        (group) => Object.values(group),
+      ),
+    ).toHaveLength(5);
     await engine.close();
   });
 
-  it('E2E-02 valid UG6x input reaches every entity, events, and snapshots', async () => {
+  it('E2E-02 valid Engine Input reaches every entity, events, and snapshots', async () => {
     const { clock, engine, timers } = await createHarness();
     const delivered: NodeMessage[] = [];
     const receiver = createEngineMessageReceiver(
@@ -256,7 +260,6 @@ describe('UG65 end-to-end smoke flows', () => {
     clock.advanceBy(599_000);
     const input = await invokeInput(engine, clock, { sensorType: 12, temp1: 100, temp2: 90 });
     expect(input.error).toBeUndefined();
-    expect(input.sent).toHaveLength(1);
     timers.runDelay(DEFAULT_PARENT_RECOMPUTATION_DELAY_MS);
     await engine.runApplication(applicationId);
     timers.runDelay(DEFAULT_PARENT_RECOMPUTATION_DELAY_MS);
@@ -266,7 +269,9 @@ describe('UG65 end-to-end smoke flows', () => {
       event: delivered.find((message) => message.topic === 'entity.updated')?.event,
     });
     const snapshot = snapshotMessage['snapshot'] as ReturnType<typeof allSnapshot>;
-    expect(snapshot.entities).toHaveLength(5);
+    expect(Object.values(snapshot.entities).flatMap((group) => Object.values(group))).toHaveLength(
+      5,
+    );
     expect(entity(engine, EntityKind.Datastream)?.state).toMatchObject({
       samples: [{ timestamp: 600_000, value: 100 }],
     });
@@ -291,44 +296,40 @@ describe('UG65 end-to-end smoke flows', () => {
     );
 
     await invokeInput(engine, clock, { sensorType: 12, temp1: 401, temp2: 20 });
-    expect(allSnapshot(engine).diagnostics?.Datastream.map(({ code }) => code)).toContain(
-      'SENSOR_BROKEN',
-    );
+    await invokeInput(engine, clock, { sensorType: 12, temp1: 401, temp2: 20 });
+    await invokeInput(engine, clock, { sensorType: 12, temp1: 401, temp2: 20 });
+    expect(diagnostics(engine, 'datastream').map(({ code }) => code)).toContain('SENSOR_BROKEN');
     await invokeInput(engine, clock, { sensorType: 12, temp1: 100, temp2: 90 });
-    expect(allSnapshot(engine).diagnostics?.Datastream).toEqual([]);
+    expect(diagnostics(engine, 'datastream')).toEqual([]);
 
     clock.advanceBy(599_000);
     await invokeInput(engine, clock, { sensorType: 12, temp1: 80, temp2: 100 });
     await engine.runApplication(applicationId);
-    expect(allSnapshot(engine).diagnostics?.Application.map(({ code }) => code)).toContain(
+    expect(diagnostics(engine, 'application').map(({ code }) => code)).toContain(
       'TEMP_OUT_ABOVE_IN',
     );
     clock.advanceBy(1_800_001);
     await engine.runApplication(applicationId);
-    expect(allSnapshot(engine).diagnostics?.Datastream.map(({ code }) => code)).toContain(
-      'NO_DATA',
-    );
-    expect(allSnapshot(engine).diagnostics?.Application.map(({ code }) => code)).toContain(
-      'NO_DATA',
-    );
+    expect(diagnostics(engine, 'datastream').map(({ code }) => code)).toContain('NO_DATA');
+    expect(diagnostics(engine, 'application').map(({ code }) => code)).toContain('NO_DATA');
 
     clock.advanceBy(600_000);
     await invokeInput(engine, clock, { sensorType: 12, temp1: 100, temp2: 90 });
     await engine.runApplication(applicationId);
-    expect(allSnapshot(engine).diagnostics?.Datastream).toEqual([]);
-    expect(allSnapshot(engine).diagnostics?.Application).toEqual([]);
+    expect(diagnostics(engine, 'datastream')).toEqual([]);
+    expect(diagnostics(engine, 'application')).toEqual([]);
 
     executionFailure.enabled = true;
     clock.advanceBy(600_000);
     await engine.runApplication(applicationId);
-    expect(allSnapshot(engine).diagnostics?.Application.map(({ code }) => code)).toContain(
+    expect(diagnostics(engine, 'application').map(({ code }) => code)).toContain(
       'APPLICATION_EXECUTION_ERROR',
     );
     executionFailure.enabled = false;
     clock.advanceBy(600_000);
     await invokeInput(engine, clock, { sensorType: 12, temp1: 100, temp2: 90 });
     await engine.runApplication(applicationId);
-    expect(allSnapshot(engine).diagnostics?.Application).toEqual([]);
+    expect(diagnostics(engine, 'application')).toEqual([]);
     await engine.close();
   });
 
@@ -336,6 +337,8 @@ describe('UG65 end-to-end smoke flows', () => {
     const store = new InMemoryStateStore();
     const firstClock = new TestClock(1_000, 0);
     const first = await createHarness(store, firstClock);
+    await invokeInput(first.engine, firstClock, { sensorType: 12, temp1: 401, temp2: 20 });
+    await invokeInput(first.engine, firstClock, { sensorType: 12, temp1: 401, temp2: 20 });
     await invokeInput(first.engine, firstClock, { sensorType: 12, temp1: 401, temp2: 20 });
     await first.engine.save();
     const previousSession = first.engine.sessionId;
@@ -345,10 +348,10 @@ describe('UG65 end-to-end smoke flows', () => {
     expect(restored.engine.sessionId).not.toBe(previousSession);
     expect(restored.engine.isReady).toBe(true);
     expect(entity(restored.engine, EntityKind.Datastream)?.state).toMatchObject({ hwError: true });
-    expect(allSnapshot(restored.engine).diagnostics?.Datastream.map(({ code }) => code)).toContain(
+    expect(diagnostics(restored.engine, 'datastream').map(({ code }) => code)).toContain(
       'SENSOR_BROKEN',
     );
-    expect(allSnapshot(restored.engine).diagnostics?.Common).toEqual([
+    expect(diagnostics(restored.engine, 'common')).toEqual([
       expect.objectContaining({
         code: 'SYSTEM_STARTED',
         details: expect.objectContaining({ sessionId: restored.engine.sessionId }),
@@ -382,7 +385,11 @@ describe('UG65 end-to-end smoke flows', () => {
       topic: 'engine.ready',
       event: events.at(-1),
     });
-    expect((initialized['snapshot'] as { entities: unknown[] }).entities).toHaveLength(5);
+    expect(
+      Object.values((initialized['snapshot'] as ReturnType<typeof allSnapshot>).entities).flatMap(
+        (group) => Object.values(group),
+      ),
+    ).toHaveLength(5);
     await engine.close();
   });
 });

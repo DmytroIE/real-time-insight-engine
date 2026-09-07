@@ -1,4 +1,5 @@
-import type { EngineConfiguration } from './configuration';
+import { applicationConfigurationEntries, type EngineConfiguration } from './configuration';
+import { applicationIdForNames } from './identifiers';
 import type { DiagnosticRetention } from './diagnostics';
 import { ProcessState } from './model';
 import type { PluginRegistry } from './plugins';
@@ -36,8 +37,7 @@ const recordValuesMatch = (
 const isDeviceState = (value: unknown): boolean =>
   isRecord(value) &&
   isNumber(value['lastUpdateTimestamp']) &&
-  typeof value['hwError'] === 'boolean' &&
-  typeof value['error'] === 'boolean';
+  typeof value['hwError'] === 'boolean';
 
 const isDatastreamState = (value: unknown): boolean =>
   isRecord(value) &&
@@ -51,10 +51,7 @@ const isDatastreamState = (value: unknown): boolean =>
   );
 
 const isAssetState = (value: unknown): boolean =>
-  isRecord(value) &&
-  isNumber(value['lastUpdateTimestamp']) &&
-  isProcessState(value['currState']) &&
-  typeof value['error'] === 'boolean';
+  isRecord(value) && isNumber(value['lastUpdateTimestamp']) && isProcessState(value['currState']);
 
 const isApplicationState = (value: unknown): boolean =>
   isRecord(value) &&
@@ -145,9 +142,9 @@ const migrateApplicationStates = (
 ): PersistedEngineSnapshot => {
   const applicationStates = { ...snapshot.entityStates.applications };
   const applicationVersions = { ...snapshot.pluginVersions.applications };
-  for (const [assetId, asset] of Object.entries(configuration.assets)) {
-    for (const application of asset.applications) {
-      const id = `${assetId}/${application.id}`;
+  for (const [assetName, asset] of Object.entries(configuration.assets)) {
+    for (const [applicationName, application] of applicationConfigurationEntries(asset)) {
+      const id = applicationIdForNames(assetName, applicationName);
       const persisted = applicationStates[id];
       if (persisted === undefined) {
         continue;

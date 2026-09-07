@@ -5,6 +5,10 @@ export {
   asDeviceId,
   asEngineId,
   asPluginTypeId,
+  applicationIdForNames,
+  assetIdForName,
+  datastreamIdForNames,
+  deviceIdForName,
   type ApplicationId,
   type AssetId,
   type DatastreamId,
@@ -41,7 +45,9 @@ export {
 } from './application-scheduler';
 export type {
   ApplicationConfiguration,
+  ApplicationConfigurationDefaults,
   AssetConfiguration,
+  DatafeedReference,
   DatastreamConfiguration,
   DeviceConfiguration,
   EngineConfiguration,
@@ -66,6 +72,7 @@ export {
 } from './datastream-values';
 export {
   Datastream,
+  DEFAULT_GRACE_PERIOD_COEFFICIENT,
   DEFAULT_INTERVAL_MARGIN_COEFFICIENT,
   type DatastreamOptions,
   type DatastreamState,

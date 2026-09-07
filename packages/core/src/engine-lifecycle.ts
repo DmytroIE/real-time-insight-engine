@@ -17,16 +17,16 @@ const includesLifecycle = (patterns: EventPattern | readonly EventPattern[]): bo
 
 export class EngineLifecycleController {
   readonly #eventBus = new InMemoryEventBus();
+  readonly #engineId: EngineId;
+  readonly #clock: Clock;
   #current: EngineLifecycleEvent;
 
   #sessionId: string;
   #sessionStartTs: number;
 
-  public constructor(
-    private readonly engineId: EngineId,
-    private readonly clock: Clock,
-    listener?: EventListener,
-  ) {
+  public constructor(engineId: EngineId, clock: Clock, listener?: EventListener) {
+    this.#engineId = engineId;
+    this.#clock = clock;
     this.#sessionStartTs = clock.wallTimeMs();
     this.#sessionId = String(this.#sessionStartTs);
     this.#current = this.lifecycleEvent('starting');
@@ -80,15 +80,15 @@ export class EngineLifecycleController {
     if (state === 'ready') {
       this.#eventBus.publish({
         type: 'engine.ready',
-        timestamp: this.clock.wallTimeMs(),
-        source: { engineId: this.engineId },
+        timestamp: this.#clock.wallTimeMs(),
+        source: { engineId: this.#engineId },
         data: { ready: true, sessionId: this.sessionId },
       });
     }
   }
 
   public beginSession(): void {
-    this.#sessionStartTs = this.clock.wallTimeMs();
+    this.#sessionStartTs = this.#clock.wallTimeMs();
     this.#sessionId = String(this.#sessionStartTs);
   }
 
@@ -99,8 +99,8 @@ export class EngineLifecycleController {
   private lifecycleEvent(state: EngineLifecycleState): EngineLifecycleEvent {
     return {
       type: 'engine.lifecycle',
-      timestamp: this.clock.wallTimeMs(),
-      source: { engineId: this.engineId },
+      timestamp: this.#clock.wallTimeMs(),
+      source: { engineId: this.#engineId },
       data: { state, ready: state === 'ready', sessionId: this.sessionId },
     };
   }

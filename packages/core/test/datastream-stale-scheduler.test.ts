@@ -93,18 +93,18 @@ describe('SCHED-01 complete Datastream scheduling', () => {
     timers.runNext();
 
     const datastreams = engine.snapshot({
-      target: { scope: 'entity', entityType: EntityKind.Device, entityId: 'device-1' },
+      target: { scope: 'entities', entityType: EntityKind.Device, entityId: 'device-1' },
       relations: 'children',
-    }).entities;
-    expect(datastreams.map(({ state }) => state)).toEqual([
-      expect.objectContaining({ noDataError: true }),
-      expect.objectContaining({ noDataError: true }),
+    }).entities.datastream;
+    expect(Object.values(datastreams).map(({ state }) => state)).toEqual([
+      expect.objectContaining({ noDataError: false }),
+      expect.objectContaining({ noDataError: false }),
     ]);
   });
 });
 
 describe('SCHED-02 independent stale timing', () => {
-  it('marks a Datastream stale before its consuming Application is due', async () => {
+  it('checks a Datastream before its consuming Application is due without bypassing grace', async () => {
     const clock = new FakeClock(1_000, 0);
     const timers = new FakeTimerScheduler();
     const engine = await Engine.create(configuration(), {
@@ -119,11 +119,9 @@ describe('SCHED-02 independent stale timing', () => {
     timers.runNext();
 
     const snapshot = engine.snapshot({ target: { scope: 'all' } });
-    const mapped = snapshot.entities.find(({ entityId }) => entityId === 'device-1/mapped');
-    const application = snapshot.entities.find(
-      ({ entityId }) => entityId === 'asset-1/application-1',
-    );
-    expect(mapped?.state).toMatchObject({ noDataError: true });
+    const mapped = snapshot.entities.datastream['device-1/mapped'];
+    const application = snapshot.entities.application['asset-1/application-1'];
+    expect(mapped?.state).toMatchObject({ noDataError: false });
     expect(application?.state).toMatchObject({ nextRunTimestamp: 2_000, noDataError: false });
   });
 });

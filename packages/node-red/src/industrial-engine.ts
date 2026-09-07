@@ -1,6 +1,7 @@
 import {
   ConfigurationBuilder,
   Engine,
+  asEngineId,
   type Clock,
   type EngineEvent,
   type PluginRegistry,
@@ -9,7 +10,7 @@ import {
 import type { Node, NodeAPI, NodeDef } from 'node-red';
 
 import { ENGINE_CONFIG_NODE_TYPE } from './node-types';
-import { DEFAULT_CONTEXT_STORE, NodeRedContextStateStore } from './node-red-context-state-store';
+import { NodeRedContextStateStore } from './node-red-context-state-store';
 
 export interface IndustrialEngineNodeConfiguration extends NodeDef {
   readonly configuration: string | unknown;
@@ -76,21 +77,61 @@ const statusForLifecycle = (
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
-const ensureContextStoreConfigured = (RED: NodeAPI, storeName: string): void => {
+interface ResolvedContextStore {
+  readonly storeName: string | undefined;
+  readonly warning?: string;
+}
+
+const resolveContextStore = (
+  RED: NodeAPI,
+  configuredStoreName: string | undefined,
+): ResolvedContextStore => {
   const settings = RED.settings as unknown as { readonly contextStorage?: unknown };
   const stores = settings.contextStorage;
+  const requestedStoreName = configuredStoreName?.trim();
+  const configuredStores =
+    typeof stores === 'object' && stores !== null
+      ? (stores as Readonly<Record<string, unknown>>)
+      : {};
+  const defaultStoreName =
+    typeof configuredStores['default'] === 'string' &&
+    Object.prototype.hasOwnProperty.call(configuredStores, configuredStores['default'])
+      ? configuredStores['default']
+      : undefined;
+
   if (
-    typeof stores !== 'object' ||
-    stores === null ||
-    !Object.prototype.hasOwnProperty.call(stores, storeName)
+    requestedStoreName !== undefined &&
+    requestedStoreName.length > 0 &&
+    Object.prototype.hasOwnProperty.call(configuredStores, requestedStoreName)
   ) {
-    throw new Error(`Node-RED context store "${storeName}" is not configured`);
+    return { storeName: requestedStoreName };
   }
+
+  if (requestedStoreName === undefined || requestedStoreName.length === 0) {
+    return {
+      storeName: defaultStoreName,
+      warning: 'The Context store is empty; using the Node-RED default context store',
+    };
+  }
+
+  return {
+    storeName: defaultStoreName,
+    warning: `Context store "${requestedStoreName}" is unavailable; using the Node-RED default context store`,
+  };
+};
+
+const statusForContextStore = (
+  contextStore: ResolvedContextStore,
+): { fill: 'green' | 'yellow'; shape: 'dot'; text: string } => {
+  if (contextStore.warning !== undefined) {
+    return { fill: 'yellow', shape: 'dot', text: 'ready: default context store' };
+  }
+  return { fill: 'green', shape: 'dot', text: 'ready' };
 };
 
 export const createIndustrialEngineCloseHandler =
-  (node: IndustrialEngineNode): ((_removed: boolean, done: () => void) => void) =>
-  (_removed, done) => {
+  (node: IndustrialEngineNode): ((removed: boolean, done: () => void) => void) =>
+  (removed, done) => {
     let completed = false;
     const complete = (): void => {
       if (!completed) {
@@ -99,7 +140,12 @@ export const createIndustrialEngineCloseHandler =
       }
     };
     void node.ready
-      .then((engine) => engine.close())
+      .then(async (engine) => {
+        await engine.close();
+        if (removed) {
+          await engine.deletePersistedState();
+        }
+      })
       .catch((error: unknown) => {
         if (node.engine !== undefined) {
           node.error(errorMessage(error));
@@ -128,14 +174,17 @@ export const registerIndustrialEngineNode = (
       const plugins = createPluginRegistry();
       const configuration = new ConfigurationBuilder(plugins).build(
         parseConfiguration(config.configuration),
+        asEngineId(config.id),
       );
-      const contextStore = config.contextStore || DEFAULT_CONTEXT_STORE;
-      ensureContextStoreConfigured(RED, contextStore);
+      const contextStore = resolveContextStore(RED, config.contextStore);
+      if (contextStore.warning !== undefined) {
+        this.warn(contextStore.warning);
+      }
       const engine = await (options?.createEngine ?? Engine.create)(configuration, {
         clock: options?.clock ?? systemClock,
         timers: options?.timers ?? systemTimers,
         plugins,
-        stateStore: new NodeRedContextStateStore(this.context(), contextStore),
+        stateStore: new NodeRedContextStateStore(this.context(), contextStore.storeName),
         lifecycleListener: (event) => {
           const status = statusForLifecycle(event);
           if (status !== undefined) {
@@ -144,7 +193,7 @@ export const registerIndustrialEngineNode = (
         },
       });
       this.engine = engine;
-      this.status({ fill: 'green', shape: 'dot', text: 'ready' });
+      this.status(statusForContextStore(contextStore));
       return engine;
     };
 

@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   Engine,
-  EntityKind,
   InMemoryStateStore,
   PluginRegistry,
   ProcessState,
@@ -175,8 +174,7 @@ describe('CLOCK-02 readiness gating', () => {
       engine.ingest({
         deviceId: asDeviceId('device-1'),
         rawPayload: {},
-        sourceTimestamp: clock.wallTimeMs(),
-        receivedTimestamp: clock.wallTimeMs(),
+        timestamp: clock.wallTimeMs(),
       }),
     ).toThrow('Engine is not ready');
     store.releaseKeys?.();
@@ -196,12 +194,8 @@ describe('CLOCK-03 cold state rebuild', () => {
     await engine.checkClock();
 
     const snapshot = engine.snapshot({ target: { scope: 'all' } });
-    const application = snapshot.entities.find(
-      ({ entityType }) => entityType === EntityKind.Application,
-    );
-    const datastream = snapshot.entities.find(
-      ({ entityType }) => entityType === EntityKind.Datastream,
-    );
+    const application = snapshot.entities.application['asset-1/application-1'];
+    const datastream = snapshot.entities.datastream['device-1/temperature'];
     expect(application?.state).toMatchObject({
       lastRunTimestamp: 0,
       currState: ProcessState.Undefined,
@@ -230,7 +224,9 @@ describe('CLOCK-04 successful reset lifecycle', () => {
       { type: 'engine.ready', data: { ready: true } },
     ]);
     expect(
-      engine.snapshot({ target: { scope: 'all' } }).diagnostics?.Common.map(({ code }) => code),
+      engine
+        .snapshot({ target: { scope: 'all' } })
+        .diagnostics.common['engine-1']?.map(({ code }) => code),
     ).toEqual(['SYSTEM_STARTED', 'CLOCK_JUMP_RESET']);
   });
 });

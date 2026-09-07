@@ -1,9 +1,9 @@
 export { createIndustrialPluginRegistry } from './plugin-registry';
 export {
   ENGINE_CONFIG_NODE_TYPE,
+  ENGINE_INPUT_NODE_TYPE,
   ENGINE_MESSAGE_RECEIVER_NODE_TYPE,
   ENGINE_STATE_SNAPSHOT_NODE_TYPE,
-  UG6X_INPUT_NODE_TYPE,
 } from './node-types';
 export {
   PLUGIN_REGISTRY_CONTEXT_KEY,
@@ -14,13 +14,12 @@ export {
 } from './industrial-engine';
 export { DEFAULT_CONTEXT_STORE, NodeRedContextStateStore } from './node-red-context-state-store';
 export {
-  createUg6xInputHandler,
-  normalizeUg6xInput,
-  registerUg6xInputNode,
+  createEngineInputHandler,
+  normalizeEngineInput,
+  registerEngineInputNode,
   type ReadinessPolicy,
-  type Ug6xInputNodeConfiguration,
-  type Ug6xInputNodeRegistrationOptions,
-} from './ug6x-input';
+  type EngineInputNodeConfiguration,
+} from './engine-input';
 export {
   createEngineMessageReceiver,
   DEFAULT_RECEIVER_MAXIMUM_DELAY_MS,

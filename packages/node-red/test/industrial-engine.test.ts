@@ -48,7 +48,6 @@ interface SinonMethod {
 }
 
 const validConfiguration = JSON.stringify({
-  engineId: 'node-red-engine',
   devices: {},
   assets: {},
 });
@@ -118,7 +117,12 @@ describe('Engine config node', () => {
       assets: [],
       applications: [],
     });
-    expect(engine.snapshot({ target: { scope: 'all' } }).entities).toEqual([]);
+    expect(engine.snapshot({ target: { scope: 'all' } }).entities).toEqual({
+      device: {},
+      datastream: {},
+      application: {},
+      asset: {},
+    });
     expect(
       (node.status as typeof node.status & SinonMethod).calledWith({
         fill: 'green',
@@ -193,18 +197,26 @@ describe('Engine config node', () => {
     ]);
   });
 
-  it('NR-05 fails clearly when the selected context store is missing', async () => {
+  it.each([
+    ['blank Context store', '   ', 'The Context store is empty'],
+    ['unavailable Context store', 'missing-store', 'Context store "missing-store" is unavailable'],
+  ])('NR-05 uses the Node-RED default store for %s', async (_label, contextStore, warning) => {
     configuredStores(false);
-    await helper.load(initializer, flow({ contextStore: 'missing-store' }));
+    await helper.load(initializer, flow({ contextStore }));
     const node = engineNode();
 
-    await expect(node.ready).rejects.toThrow('missing-store');
-    await Promise.resolve();
+    await expect(node.ready).resolves.toMatchObject({ isReady: true });
 
-    expect(node.engine).toBeUndefined();
-    expect((node.error as typeof node.error & SinonMethod).calledWithMatch('missing-store')).toBe(
-      true,
-    );
+    expect((node.warn as typeof node.warn & SinonMethod).calledWithMatch(warning)).toBe(true);
+    expect(
+      (node.status as typeof node.status & SinonMethod).calledWith({
+        fill: 'yellow',
+        shape: 'dot',
+        text: 'ready: default context store',
+      }),
+    ).toBe(true);
+    expect((node.error as typeof node.error & SinonMethod).callCount).toBe(0);
+    expect(node.engine?.isReady).toBe(true);
   });
 
   it('NR-06 awaits Engine shutdown and calls the close callback once', async () => {
@@ -235,5 +247,21 @@ describe('Engine config node', () => {
     expect(close).toHaveBeenCalledTimes(1);
     expect(doneCount).toBe(1);
     expect(node.engine).toBe(fakeEngine);
+  });
+
+  it('NR-06 deletes persisted state when the config node is removed', async () => {
+    const close = vi.fn(async () => undefined);
+    const deletePersistedState = vi.fn(async () => undefined);
+    const fakeEngine = { close, deletePersistedState, isReady: true } as unknown as Engine;
+    const node = {
+      engine: fakeEngine,
+      ready: Promise.resolve(fakeEngine),
+      error: vi.fn(),
+    } as unknown as IndustrialEngineNode;
+
+    await new Promise<void>((resolve) => createIndustrialEngineCloseHandler(node)(true, resolve));
+
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(deletePersistedState).toHaveBeenCalledTimes(1);
   });
 });

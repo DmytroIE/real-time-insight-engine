@@ -93,43 +93,54 @@ const createEngine = (applicationFails = false): Engine => {
 };
 
 const applicationTarget = {
-  scope: 'entity' as const,
+  scope: 'entities' as const,
   entityType: EntityKind.Application,
   entityId: 'asset-1/application-1',
 };
+
+const entitySnapshot = (response: ReturnType<Engine['snapshot']>, type: EntityKind, id: string) =>
+  response.entities[type][id];
 
 describe('SNAP-01 immutable entity DTO', () => {
   it('contains identity, type, relationships, and a deep serializable state copy', () => {
     const engine = createEngine();
     const response = engine.snapshot({ target: applicationTarget });
 
-    expect(response.entities).toEqual([
-      {
-        entityType: EntityKind.Application,
-        entityId: 'asset-1/application-1',
-        pluginType: 'sxs.test-application',
-        relationships: {
-          parent: { kind: EntityKind.Asset, id: 'asset-1' },
-          children: [],
-          datafeeds: {
-            temperature: { kind: EntityKind.Datastream, id: 'device-1/temperature' },
-          },
-        },
-        state: {
-          lastRunTimestamp: 0,
-          nextRunTimestamp: 100,
-          currState: ProcessState.Undefined,
-          noDataError: false,
-          appError: false,
-          pluginState: { nested: { runs: 0 } },
+    expect(entitySnapshot(response, EntityKind.Application, 'asset-1/application-1')).toEqual({
+      entityType: EntityKind.Application,
+      entityId: 'asset-1/application-1',
+      entityName: 'application-1',
+      pluginType: 'sxs.test-application',
+      relationships: {
+        parent: { kind: EntityKind.Asset, id: 'asset-1' },
+        children: [],
+        datafeeds: {
+          temperature: { kind: EntityKind.Datastream, id: 'device-1/temperature' },
         },
       },
-    ]);
+      state: {
+        lastRunTimestamp: 0,
+        nextRunTimestamp: 100,
+        currState: ProcessState.Undefined,
+        noDataError: false,
+        appError: false,
+        pluginState: { nested: { runs: 0 } },
+      },
+    });
     expect(JSON.parse(JSON.stringify(response))).toEqual(response);
     expect(() =>
-      Object.assign(response.entities[0]?.state ?? {}, { currState: ProcessState.Error }),
+      Object.assign(
+        entitySnapshot(response, EntityKind.Application, 'asset-1/application-1')?.state ?? {},
+        { currState: ProcessState.Error },
+      ),
     ).toThrow();
-    expect(engine.snapshot({ target: applicationTarget }).entities[0]?.state).toMatchObject({
+    expect(
+      entitySnapshot(
+        engine.snapshot({ target: applicationTarget }),
+        EntityKind.Application,
+        'asset-1/application-1',
+      )?.state,
+    ).toMatchObject({
       currState: ProcessState.Undefined,
     });
   });
@@ -141,7 +152,7 @@ describe('SNAP-02 relationship scopes', () => {
     const parent = engine.snapshot({ target: applicationTarget, relations: 'parent' });
     const children = engine.snapshot({
       target: {
-        scope: 'entity',
+        scope: 'entities',
         entityType: EntityKind.Device,
         entityId: 'device-1',
       },
@@ -149,7 +160,7 @@ describe('SNAP-02 relationship scopes', () => {
     });
     const family = engine.snapshot({
       target: {
-        scope: 'entity',
+        scope: 'entities',
         entityType: EntityKind.Datastream,
         entityId: 'device-1/temperature',
       },
@@ -165,43 +176,73 @@ describe('SNAP-02 relationship scopes', () => {
       },
     );
 
-    expect(parent.entities.map(({ entityType, entityId }) => [entityType, entityId])).toEqual([
-      [EntityKind.Asset, 'asset-1'],
-    ]);
-    expect(children.entities.map(({ entityType, entityId }) => [entityType, entityId])).toEqual([
-      [EntityKind.Datastream, 'device-1/temperature'],
-    ]);
-    expect(family.entities.map(({ entityType, entityId }) => [entityType, entityId])).toEqual([
-      [EntityKind.Datastream, 'device-1/temperature'],
-      [EntityKind.Device, 'device-1'],
-    ]);
-    expect(eventSource.entities.map(({ entityType, entityId }) => [entityType, entityId])).toEqual([
-      [EntityKind.Device, 'device-1'],
-    ]);
+    expect(Object.keys(parent.entities[EntityKind.Asset])).toEqual(['asset-1']);
+    expect(Object.keys(children.entities[EntityKind.Datastream])).toEqual(['device-1/temperature']);
+    expect(Object.keys(family.entities[EntityKind.Datastream])).toEqual(['device-1/temperature']);
+    expect(Object.keys(family.entities[EntityKind.Device])).toEqual(['device-1']);
+    expect(Object.keys(eventSource.entities[EntityKind.Device])).toEqual(['device-1']);
   });
 });
 
-describe('SNAP-03 whole-Engine snapshot', () => {
-  it('includes every entity and every active diagnostic category', async () => {
+describe('SNAP-03 and SNAP-07 indexed whole-Engine and diagnostic snapshots', () => {
+  it('indexes every entity and active diagnostic by lowercase type and source ID', async () => {
     const engine = createEngine(true);
     await engine.runApplication(asApplicationId('asset-1/application-1'));
 
     const response = engine.snapshot({ target: { scope: 'all' } });
 
-    expect(response.entities.map(({ entityType }) => entityType)).toEqual([
+    expect(Object.keys(response.entities)).toEqual([
       EntityKind.Device,
       EntityKind.Datastream,
       EntityKind.Application,
       EntityKind.Asset,
     ]);
-    expect(Object.keys(response.diagnostics ?? {})).toEqual([
-      'Common',
-      'Device',
-      'Datastream',
-      'Application',
-      'Asset',
+    expect(response.entities[EntityKind.Application]['asset-1/application-1']).toBeDefined();
+    expect(Object.keys(response.diagnostics)).toEqual([
+      'common',
+      'device',
+      'datastream',
+      'application',
+      'asset',
     ]);
-    expect(response.diagnostics?.Application).toEqual([
+    expect(response.diagnostics.application['asset-1/application-1']).toEqual([
+      expect.objectContaining({ code: 'APPLICATION_EXECUTION_ERROR' }),
+    ]);
+  });
+
+  it('filters entities and diagnostics by optional type and source ID', async () => {
+    const engine = createEngine(true);
+    await engine.runApplication(asApplicationId('asset-1/application-1'));
+
+    const allEntities = engine.snapshot({ target: { scope: 'entities' } });
+    const devices = engine.snapshot({
+      target: { scope: 'entities', entityType: EntityKind.Device },
+    });
+    const oneDevice = engine.snapshot({
+      target: { scope: 'entities', entityType: EntityKind.Device, entityId: 'device-1' },
+    });
+    const applicationDiagnostics = engine.snapshot({
+      target: { scope: 'diagnostics', entityType: EntityKind.Application },
+    });
+    const oneApplicationDiagnostics = engine.snapshot({
+      target: {
+        scope: 'diagnostics',
+        entityType: EntityKind.Application,
+        entityId: 'asset-1/application-1',
+      },
+    });
+
+    expect(Object.keys(allEntities.entities[EntityKind.Device])).toEqual(['device-1']);
+    expect(Object.keys(allEntities.entities[EntityKind.Application])).toEqual([
+      'asset-1/application-1',
+    ]);
+    expect(Object.keys(devices.entities[EntityKind.Device])).toEqual(['device-1']);
+    expect(Object.keys(devices.entities[EntityKind.Datastream])).toEqual([]);
+    expect(Object.keys(oneDevice.entities[EntityKind.Device])).toEqual(['device-1']);
+    expect(Object.keys(applicationDiagnostics.diagnostics.application)).toEqual([
+      'asset-1/application-1',
+    ]);
+    expect(oneApplicationDiagnostics.diagnostics.application['asset-1/application-1']).toEqual([
       expect.objectContaining({ code: 'APPLICATION_EXECUTION_ERROR' }),
     ]);
   });
@@ -216,7 +257,9 @@ describe('SNAP-04 dotted state projection', () => {
       statePaths: ['currState', 'pluginState.nested.runs'],
     });
 
-    expect(response.entities[0]?.state).toEqual({
+    expect(
+      entitySnapshot(response, EntityKind.Application, 'asset-1/application-1')?.state,
+    ).toEqual({
       currState: ProcessState.Undefined,
       pluginState: { nested: { runs: 0 } },
     });
@@ -233,7 +276,11 @@ describe('SNAP-05 non-strict missing paths', () => {
       statePaths: ['currState', 'pluginState.missing'],
     });
 
-    expect(response.entities[0]?.state).toEqual({ currState: ProcessState.Undefined });
+    expect(
+      entitySnapshot(response, EntityKind.Application, 'asset-1/application-1')?.state,
+    ).toEqual({
+      currState: ProcessState.Undefined,
+    });
     expect(response.missingPaths).toEqual([
       {
         entity: { kind: EntityKind.Application, id: 'asset-1/application-1' },

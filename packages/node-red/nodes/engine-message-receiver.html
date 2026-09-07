@@ -4,7 +4,7 @@
     color: '#8fb8a8',
     defaults: {
       name: { value: '' },
-      engine: { value: '', type: 'industrial-engine', required: true },
+      engine: { value: '', type: 'insight-engine', required: true },
       eventPatterns: { value: '*' },
     },
     inputs: 0,
@@ -28,4 +28,31 @@
     <label for="node-input-eventPatterns">Event patterns</label>
     <input type="text" id="node-input-eventPatterns" placeholder="entity.updated, diagnostic.*" />
   </div>
+</script>
+
+<script type="text/x-red" data-help-name="engine-message-receiver">
+  <p>Receives events from an Insight Engine and sends them as Node-RED messages.</p>
+  <p>
+    Each output message has <code>msg.topic</code> and <code>msg.event</code>. The event
+    contains its type, timestamp, source, and event data where needed. It never contains live
+    Engine objects or full state. Use an Engine State Snapshot node when state is needed.
+  </p>
+  <p><strong>Event patterns</strong></p>
+  <p>Enter one or more event types, separated by commas or lines.</p>
+  <ul>
+    <li><code>*</code> receives every event.</li>
+    <li><code>entity.updated</code> receives entity state-change notifications.</li>
+    <li><code>diagnostic.*</code> receives raised, updated, and cleared diagnostics.</li>
+    <li><code>engine.lifecycle, engine.ready</code> receives Engine readiness changes.</li>
+  </ul>
+  <p>
+    Lifecycle events and diagnostic transitions are sent immediately and in the same order as
+    the Engine emits them. Repeated <code>entity.updated</code> events may be combined: the
+    latest event for each entity is sent after about 100 ms, and no later than 500 ms after the
+    first event in a burst.
+  </p>
+  <p>
+    The node sends the current <code>engine.lifecycle</code> event when it connects, so a flow
+    can learn the current readiness state without waiting for the next transition.
+  </p>
 </script>

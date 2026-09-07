@@ -11,19 +11,18 @@ import {
   DEFAULT_CLOCK_JUMP_THRESHOLD_MS,
   type ClockJump,
 } from './clock-jump-monitor';
-import type { EngineConfiguration } from './configuration';
+import {
+  applicationConfigurationEntries,
+  type DatafeedReference,
+  type EngineConfiguration,
+} from './configuration';
 import { Datastream, type PersistenceMarker, type RestoredDatastreamState } from './datastream';
 import {
   DatastreamStaleScheduler,
   type DatastreamStaleTaskResult,
 } from './datastream-stale-scheduler';
-import { DiagnosticRegistry } from './diagnostics';
-import {
-  Device,
-  type DevicePayloadInput,
-  type DevicePayloadParser,
-  type RestoredDeviceState,
-} from './device';
+import { DiagnosticRegistry, type Diagnostic } from './diagnostics';
+import { Device, type DevicePayloadParser, type RestoredDeviceState } from './device';
 import { EngineLifecycleController } from './engine-lifecycle';
 import {
   type EntityEventSource,
@@ -33,10 +32,10 @@ import {
   type Unsubscribe,
 } from './events';
 import {
-  asApplicationId,
-  asAssetId,
-  asDatastreamId,
-  asDeviceId,
+  applicationIdForNames,
+  assetIdForName,
+  datastreamIdForNames,
+  deviceIdForName,
   type ApplicationId,
   type AssetId,
   type DatastreamId,
@@ -60,6 +59,8 @@ import {
   type EntitySnapshot,
   type MissingStatePath,
   type SnapshotDiagnosticGroups,
+  type SnapshotDiagnosticCategory,
+  type SnapshotEntityGroups,
   type SnapshotRequest,
 } from './snapshots';
 import {
@@ -95,17 +96,22 @@ export interface EngineRegistryView {
   readonly applications: readonly ApplicationId[];
 }
 
-export type EngineIngestIssue = 'NO_DEVICE_NAME' | 'NO_GATEWAY_TIME' | 'INVALID_GATEWAY_TIME';
+export type EngineIngestIssue = 'INVALID_DEVICE_NAME' | 'INVALID_RAW_PAYLOAD' | 'INVALID_TIMESTAMP';
 
-export interface EngineIngestInput extends DevicePayloadInput {
+export interface EngineIngestInput {
+  readonly deviceName?: string;
   readonly deviceId?: DeviceId;
+  readonly rawPayload?: Readonly<Record<string, unknown>>;
+  readonly timestamp?: number;
   readonly source?: string;
   readonly issues?: readonly EngineIngestIssue[];
 }
 
-const qualifiedId = (parentId: string, childId: string): string => `${parentId}/${childId}`;
 const entityKey = ({ kind, id }: EntityRef): string => `${kind}:${id}`;
 const lifecycleBootstrap = Symbol('engineLifecycleBootstrap');
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 interface InternalEngineDependencies extends EngineDependencies {
   readonly [lifecycleBootstrap]?: EngineLifecycleController;
@@ -140,6 +146,7 @@ const freezeIds = <Id extends string>(ids: Iterable<Id>): readonly Id[] => Objec
 
 export class Engine implements PersistenceMarker {
   readonly #lifecycle: EngineLifecycleController;
+  readonly #dependencies: EngineDependencies;
   readonly #diagnostics: DiagnosticRegistry;
   readonly #datastreamStaleScheduler: DatastreamStaleScheduler;
   readonly #applicationScheduler: ApplicationScheduler;
@@ -164,42 +171,46 @@ export class Engine implements PersistenceMarker {
 
   public constructor(
     configuration: EngineConfiguration,
-    private readonly dependencies: EngineDependencies,
+    dependencies: EngineDependencies,
     restored?: PersistedEngineSnapshot,
   ) {
+    this.#dependencies = dependencies;
     this.id = configuration.engineId;
     this.#configuration = structuredClone(configuration);
-    const suppliedLifecycle = (dependencies as InternalEngineDependencies)[lifecycleBootstrap];
+    const suppliedLifecycle = (this.#dependencies as InternalEngineDependencies)[
+      lifecycleBootstrap
+    ];
     this.#lifecycle =
-      suppliedLifecycle ?? new EngineLifecycleController(this.id, dependencies.clock);
+      suppliedLifecycle ?? new EngineLifecycleController(this.id, this.#dependencies.clock);
     this.#diagnostics = new DiagnosticRegistry(
-      dependencies.clock,
+      this.#dependencies.clock,
       this.#lifecycle.eventBus,
       restored?.diagnostics,
       () => this.markDirty(),
     );
     this.#datastreamStaleScheduler = new DatastreamStaleScheduler(
-      dependencies.clock,
-      dependencies.timers,
+      this.#dependencies.clock,
+      this.#dependencies.timers,
       () => [...this.#datastreams.values()],
       (result) => this.recordStaleTaskResult(result),
     );
     this.#applicationScheduler = new ApplicationScheduler(
-      dependencies.clock,
-      dependencies.timers,
+      this.#dependencies.clock,
+      this.#dependencies.timers,
       () => [...this.#applications.values()],
       (result) => this.recordApplicationTaskResult(result),
     );
     this.#clockJumpMonitor = new ClockJumpMonitor(
-      dependencies.clock,
-      dependencies.timers,
+      this.#dependencies.clock,
+      this.#dependencies.timers,
       this.clockJumpThresholdMs(),
       (jump) => this.coldReset(jump),
     );
     try {
-      Engine.preflight(configuration, dependencies.plugins);
+      Engine.preflight(configuration, this.#dependencies.plugins);
       this.recordSessionStarted();
       this.construct(configuration, restored?.entityStates);
+      this.purgeObsoleteDiagnostics();
       this.#datastreamStaleScheduler.start();
       this.#applicationScheduler.start();
       this.#clockJumpMonitor.start();
@@ -292,7 +303,7 @@ export class Engine implements PersistenceMarker {
   }
 
   public async save(): Promise<void> {
-    const store = this.dependencies.stateStore;
+    const store = this.#dependencies.stateStore;
     if (store === undefined) {
       throw new Error('Engine does not have a StateStore');
     }
@@ -302,6 +313,15 @@ export class Engine implements PersistenceMarker {
     if (this.#changeVersion === savedVersion) {
       this.#dirty = false;
     }
+  }
+
+  public async deletePersistedState(): Promise<void> {
+    const store = this.#dependencies.stateStore;
+    if (store === undefined) {
+      throw new Error('Engine does not have a StateStore');
+    }
+    const keys = await store.keys(engineStateKeyPrefix(this.id));
+    await Promise.all(keys.map((key) => store.delete(key)));
   }
 
   public registry(): EngineRegistryView {
@@ -335,13 +355,39 @@ export class Engine implements PersistenceMarker {
     if (!this.isReady) {
       throw new Error('Engine is not ready');
     }
+    const rawPayload = input.rawPayload;
+    const timestamp = input.timestamp;
+    const issues = [...(input.issues ?? [])];
+    if (
+      (input.deviceName === undefined && input.deviceId === undefined) ||
+      (input.deviceName !== undefined && input.deviceName.trim() === '')
+    ) {
+      issues.push('INVALID_DEVICE_NAME');
+    }
+    if (!isRecord(rawPayload)) {
+      issues.push('INVALID_RAW_PAYLOAD');
+    }
+    if (typeof timestamp !== 'number' || !Number.isFinite(timestamp)) {
+      issues.push('INVALID_TIMESTAMP');
+    }
     const commonScope = this.#diagnostics.createScope({
       category: 'Common',
       sourceId: this.id,
       ownerScope: 'engine-ingest',
       source: { engineId: this.id },
     });
-    const deviceId = input.deviceId;
+    if (issues.length > 0) {
+      commonScope.report({
+        code: 'INVALID_INGEST_ENVELOPE',
+        severity: 'error',
+        message: 'Input payload does not match the Engine ingestion contract',
+        details: { source: input.source ?? 'unknown', issues: [...new Set(issues)] },
+      });
+      commonScope.complete();
+      return Promise.resolve(false);
+    }
+    const deviceId =
+      input.deviceName === undefined ? input.deviceId : deviceIdForName(input.deviceName);
     const device = deviceId === undefined ? undefined : this.#devices.get(deviceId);
     if (deviceId === undefined || device === undefined) {
       commonScope.report({
@@ -353,7 +399,7 @@ export class Engine implements PersistenceMarker {
             : `Input references unknown Device ${deviceId}`,
         details: {
           source: input.source ?? 'unknown',
-          ...(deviceId === undefined ? {} : { deviceId }),
+          ...(deviceId === undefined ? {} : { deviceName: input.deviceName ?? deviceId, deviceId }),
         },
       });
       commonScope.complete();
@@ -361,35 +407,13 @@ export class Engine implements PersistenceMarker {
     }
     commonScope.complete();
 
-    const pluginType = this.#configuration.devices[deviceId]?.type;
-    const envelopeScope = this.#diagnostics.createScope({
-      category: 'Device',
-      sourceId: deviceId,
-      ownerScope: 'ingest-envelope',
-      source: {
-        engineId: this.id,
-        entityType: EntityKind.Device,
-        entityId: deviceId,
-        ...(pluginType === undefined ? {} : { pluginType }),
-      },
-    });
-    for (const issue of input.issues ?? []) {
-      if (issue === 'NO_GATEWAY_TIME') {
-        envelopeScope.report({
-          code: issue,
-          severity: 'error',
-          message: 'Gateway time is missing; received time was used',
-        });
-      } else if (issue === 'INVALID_GATEWAY_TIME') {
-        envelopeScope.report({
-          code: issue,
-          severity: 'error',
-          message: 'Gateway time is invalid; received time was used',
-        });
-      }
-    }
-    envelopeScope.complete();
-    return this.trackOperation(device.parsePayload(input));
+    return this.trackOperation(
+      device.parsePayload({
+        rawPayload: rawPayload as Readonly<Record<string, unknown>>,
+        sourceTimestamp: timestamp as number,
+        receivedTimestamp: this.#dependencies.clock.wallTimeMs(),
+      }),
+    );
   }
 
   public checkClock(): Promise<boolean> {
@@ -412,13 +436,8 @@ export class Engine implements PersistenceMarker {
     request: SnapshotRequest,
     eventSource?: EntityEventSource,
   ): EngineSnapshotResponse {
-    const refs = this.resolveSnapshotRefs(request, eventSource);
     const missingPaths: MissingStatePath[] = [];
-    const entities = refs.map((ref) => {
-      const view = this.entitySnapshot(ref, request.statePaths);
-      missingPaths.push(...view.missingPaths.map((path) => ({ entity: { ...ref }, path })));
-      return view.snapshot;
-    });
+    const entities = this.entityGroupsForSnapshot(request, eventSource, missingPaths);
 
     if (request.strictPaths && missingPaths.length > 0) {
       throw new SnapshotPathError(deepFreezeSnapshot(structuredClone(missingPaths)));
@@ -426,28 +445,36 @@ export class Engine implements PersistenceMarker {
 
     return deepFreezeSnapshot({
       entities,
-      ...(request.target.scope === 'all' ? { diagnostics: this.diagnosticGroups() } : {}),
+      diagnostics: this.diagnosticGroupsForSnapshot(request),
       missingPaths,
     });
   }
 
   private static preflight(configuration: EngineConfiguration, plugins: PluginRegistry): void {
     const entityIds = new Set<string>();
-    for (const [deviceId, deviceConfiguration] of Object.entries(configuration.devices)) {
+    for (const [deviceName, deviceConfiguration] of Object.entries(configuration.devices)) {
+      const deviceId = deviceIdForName(deviceName);
       Engine.assertUnique(entityIds, 'device', deviceId);
       const plugin = plugins.resolveDevice(deviceConfiguration.type);
       for (const datastreamName of Object.keys(deviceConfiguration.datastreams ?? {})) {
-        Engine.assertUnique(entityIds, 'datastream', qualifiedId(deviceId, datastreamName));
+        Engine.assertUnique(
+          entityIds,
+          'datastream',
+          datastreamIdForNames(deviceName, datastreamName),
+        );
         if (!plugin.datastreams.includes(datastreamName)) {
           throw new Error(`Device ${deviceId} has undeclared Datastream: ${datastreamName}`);
         }
       }
     }
 
-    for (const [assetId, assetConfiguration] of Object.entries(configuration.assets)) {
+    for (const [assetName, assetConfiguration] of Object.entries(configuration.assets)) {
+      const assetId = assetIdForName(assetName);
       Engine.assertUnique(entityIds, 'asset', assetId);
-      for (const applicationConfiguration of assetConfiguration.applications) {
-        const applicationId = qualifiedId(assetId, applicationConfiguration.id);
+      for (const [applicationName, applicationConfiguration] of applicationConfigurationEntries(
+        assetConfiguration,
+      )) {
+        const applicationId = applicationIdForNames(assetName, applicationName);
         Engine.assertUnique(entityIds, 'application', applicationId);
         const plugin = plugins.resolveApplication(applicationConfiguration.type);
         for (const requiredDatafeed of plugin.requiredDatafeeds) {
@@ -458,9 +485,10 @@ export class Engine implements PersistenceMarker {
           }
         }
         for (const target of Object.values(applicationConfiguration.datafeeds)) {
-          if (!entityIds.has(`datastream:${target}`)) {
+          const datastreamId = Engine.datafeedDatastreamId(target);
+          if (!entityIds.has(`datastream:${datastreamId}`)) {
             throw new Error(
-              `Application ${applicationId} references unknown Datastream: ${target}`,
+              `Application ${applicationId} references unknown Datastream: ${datastreamId}`,
             );
           }
         }
@@ -471,21 +499,27 @@ export class Engine implements PersistenceMarker {
   private construct(configuration: EngineConfiguration, restored?: EngineEntityStates): void {
     const sessionStartTimestamp = this.sessionStartTs;
     for (const [deviceName, deviceConfiguration] of Object.entries(configuration.devices)) {
-      const id = asDeviceId(deviceName);
-      const plugin = this.dependencies.plugins.resolveDevice(deviceConfiguration.type);
+      const id = deviceIdForName(deviceName);
+      const plugin = this.#dependencies.plugins.resolveDevice(deviceConfiguration.type);
       const parser = requireDeviceParser(
-        plugin.create({ id, settings: deviceConfiguration.settings }),
+        plugin.create({ id, settings: deviceConfiguration.settings ?? plugin.defaultSettings }),
         plugin.type,
       );
       const device = new Device(
-        { id, engineId: this.id, pluginType: plugin.type },
+        {
+          id,
+          name: deviceName,
+          engineId: this.id,
+          pluginType: plugin.type,
+          settings: deviceConfiguration.settings ?? plugin.defaultSettings,
+        },
         parser,
-        this.dependencies.clock,
+        this.#dependencies.clock,
         this.#lifecycle.eventBus,
         this.#diagnostics,
         this,
-        this.dependencies.timers,
-        restored?.devices[deviceName] as RestoredDeviceState | undefined,
+        this.#dependencies.timers,
+        restored?.devices[id] as RestoredDeviceState | undefined,
       );
       this.#devices.set(id, device);
       this.#pluginTypes.set(entityKey({ kind: EntityKind.Device, id }), plugin.type);
@@ -494,16 +528,17 @@ export class Engine implements PersistenceMarker {
       for (const [datastreamName, datastreamConfiguration] of Object.entries(
         deviceConfiguration.datastreams ?? {},
       )) {
-        const datastreamId = asDatastreamId(qualifiedId(deviceName, datastreamName));
+        const datastreamId = datastreamIdForNames(deviceName, datastreamName);
         const datastream = new Datastream(
           {
             id: datastreamId,
+            name: datastreamName,
             engineId: this.id,
             pluginType: plugin.type,
             ...datastreamConfiguration,
             sessionStartTimestamp,
           },
-          this.dependencies.clock,
+          this.#dependencies.clock,
           this.#lifecycle.eventBus,
           this.#diagnostics,
           this,
@@ -522,29 +557,31 @@ export class Engine implements PersistenceMarker {
     }
 
     for (const assetName of Object.keys(configuration.assets)) {
-      const id = asAssetId(assetName);
+      const id = assetIdForName(assetName);
       const asset = new Asset(
-        { id, engineId: this.id },
-        this.dependencies.clock,
+        { id, name: assetName, engineId: this.id },
+        this.#dependencies.clock,
         this.#lifecycle.eventBus,
         this,
-        this.dependencies.timers,
-        restored?.assets[assetName] as RestoredAssetState | undefined,
+        this.#dependencies.timers,
+        restored?.assets[id] as RestoredAssetState | undefined,
       );
       this.#assets.set(id, asset);
     }
 
     for (const [assetName, assetConfiguration] of Object.entries(configuration.assets)) {
-      const asset = this.#assets.get(asAssetId(assetName));
+      const asset = this.#assets.get(assetIdForName(assetName));
       if (asset === undefined) {
         throw new Error(`Unknown Asset during construction: ${assetName}`);
       }
-      for (const applicationConfiguration of assetConfiguration.applications) {
-        const id = asApplicationId(qualifiedId(assetName, applicationConfiguration.id));
-        const plugin = this.dependencies.plugins.resolveApplication(applicationConfiguration.type);
+      for (const [applicationName, applicationConfiguration] of applicationConfigurationEntries(
+        assetConfiguration,
+      )) {
+        const id = applicationIdForNames(assetName, applicationName);
+        const plugin = this.#dependencies.plugins.resolveApplication(applicationConfiguration.type);
         const datafeeds = Object.fromEntries(
           Object.entries(applicationConfiguration.datafeeds).map(([name, target]) => {
-            const datastream = this.#datastreams.get(asDatastreamId(target));
+            const datastream = this.#datastreams.get(Engine.datafeedDatastreamId(target));
             if (datastream === undefined) {
               throw new Error(`Application ${id} references unknown Datastream: ${target}`);
             }
@@ -554,7 +591,7 @@ export class Engine implements PersistenceMarker {
         const evaluator = requireApplicationEvaluator(
           plugin.create({
             id,
-            settings: applicationConfiguration.settings,
+            settings: applicationConfiguration.settings ?? plugin.defaultSettings,
             ...(restored?.applications[id]?.pluginState === undefined
               ? {}
               : { restoredState: restored.applications[id].pluginState }),
@@ -565,13 +602,17 @@ export class Engine implements PersistenceMarker {
         const application = new Application(
           {
             id,
+            name: applicationName,
+            assetId: assetIdForName(assetName),
+            assetName,
             engineId: this.id,
             pluginType: plugin.type,
             runIntervalMs: applicationConfiguration.runIntervalMs,
+            sessionStartTimestamp,
           },
           datafeeds,
           evaluator,
-          this.dependencies.clock,
+          this.#dependencies.clock,
           this.#lifecycle.eventBus,
           this.#diagnostics,
           this,
@@ -581,7 +622,7 @@ export class Engine implements PersistenceMarker {
         );
         this.#applications.set(id, application);
         asset.registerApplication(application);
-        const assetRef: EntityRef = { kind: EntityKind.Asset, id: asAssetId(assetName) };
+        const assetRef: EntityRef = { kind: EntityKind.Asset, id: assetIdForName(assetName) };
         const applicationRef: EntityRef = { kind: EntityKind.Application, id };
         this.addRelationship(assetRef, applicationRef);
         this.#datafeeds.set(
@@ -589,7 +630,10 @@ export class Engine implements PersistenceMarker {
           Object.fromEntries(
             Object.entries(applicationConfiguration.datafeeds).map(([name, target]) => [
               name,
-              { kind: EntityKind.Datastream, id: asDatastreamId(target) } satisfies EntityRef,
+              {
+                kind: EntityKind.Datastream,
+                id: Engine.datafeedDatastreamId(target),
+              } satisfies EntityRef,
             ]),
           ),
         );
@@ -608,6 +652,12 @@ export class Engine implements PersistenceMarker {
     ids.add(key);
   }
 
+  private static datafeedDatastreamId(target: DatafeedReference | string): DatastreamId {
+    return typeof target === 'string'
+      ? (target as DatastreamId)
+      : datastreamIdForNames(target.device, target.datastream);
+  }
+
   private addRelationship(parent: EntityRef, child: EntityRef): void {
     this.#parents.set(entityKey(child), parent);
     const children = this.#children.get(entityKey(parent)) ?? [];
@@ -619,29 +669,50 @@ export class Engine implements PersistenceMarker {
     request: SnapshotRequest,
     eventSource: EntityEventSource | undefined,
   ): readonly EntityRef[] {
-    if (request.target.scope === 'all') {
-      return this.allEntityRefs();
-    }
-
-    let selected: EntityRef;
-    if (request.target.scope === 'eventSource') {
-      if (eventSource === undefined || eventSource.engineId !== this.id) {
-        throw new SnapshotRequestError(
-          'Snapshot event source is missing or belongs to another Engine',
+    switch (request.target.scope) {
+      case 'all':
+        return this.allEntityRefs();
+      case 'diagnostics':
+        return [];
+      case 'entities': {
+        const { entityType, entityId } = request.target;
+        if (entityType === undefined) {
+          return this.allEntityRefs();
+        }
+        if (entityId === undefined) {
+          return this.allEntityRefs().filter((ref) => ref.kind === entityType);
+        }
+        return this.relatedSnapshotRefs(
+          { kind: entityType, id: entityId } as EntityRef,
+          request.relations,
         );
       }
-      selected = { kind: eventSource.entityType, id: eventSource.entityId } as EntityRef;
-    } else {
-      selected = {
-        kind: request.target.entityType,
-        id: request.target.entityId,
-      } as EntityRef;
+      case 'eventSource': {
+        if (eventSource === undefined || eventSource.engineId !== this.id) {
+          throw new SnapshotRequestError(
+            'Snapshot event source is missing or belongs to another Engine',
+          );
+        }
+        const selected = {
+          kind: eventSource.entityType,
+          id: eventSource.entityId,
+        } as EntityRef;
+        if (!this.hasEntity(selected)) {
+          throw new SnapshotRequestError(`Unknown entity: ${selected.kind}:${selected.id}`);
+        }
+        return this.relatedSnapshotRefs(selected, request.relations);
+      }
     }
+  }
+
+  private relatedSnapshotRefs(
+    selected: EntityRef,
+    relations: SnapshotRequest['relations'],
+  ): readonly EntityRef[] {
     if (!this.hasEntity(selected)) {
       throw new SnapshotRequestError(`Unknown entity: ${selected.kind}:${selected.id}`);
     }
-
-    switch (request.relations ?? 'self') {
+    switch (relations ?? 'self') {
       case 'self':
         return [selected];
       case 'parent': {
@@ -659,6 +730,25 @@ export class Engine implements PersistenceMarker {
         ];
       }
     }
+  }
+
+  private entityGroupsForSnapshot(
+    request: SnapshotRequest,
+    eventSource: EntityEventSource | undefined,
+    missingPaths: MissingStatePath[],
+  ): SnapshotEntityGroups {
+    const entities: Record<EntityKind, Record<string, EntitySnapshot>> = {
+      [EntityKind.Device]: {},
+      [EntityKind.Datastream]: {},
+      [EntityKind.Application]: {},
+      [EntityKind.Asset]: {},
+    };
+    for (const ref of this.resolveSnapshotRefs(request, eventSource)) {
+      const view = this.entitySnapshot(ref, request.statePaths);
+      missingPaths.push(...view.missingPaths.map((path) => ({ entity: { ...ref }, path })));
+      entities[ref.kind][ref.id] = view.snapshot;
+    }
+    return entities;
   }
 
   private allEntityRefs(): readonly EntityRef[] {
@@ -697,6 +787,7 @@ export class Engine implements PersistenceMarker {
       snapshot: {
         entityType: ref.kind,
         entityId: ref.id,
+        entityName: this.entityName(ref),
         ...(pluginType === undefined ? {} : { pluginType }),
         relationships: {
           ...(parent === undefined ? {} : { parent: { ...parent } }),
@@ -731,14 +822,46 @@ export class Engine implements PersistenceMarker {
     return state;
   }
 
-  private diagnosticGroups(): SnapshotDiagnosticGroups {
-    return {
-      Common: this.#diagnostics.records('Common'),
-      Device: this.#diagnostics.records('Device'),
-      Datastream: this.#diagnostics.records('Datastream'),
-      Application: this.#diagnostics.records('Application'),
-      Asset: this.#diagnostics.records('Asset'),
+  private entityName(ref: EntityRef): string {
+    switch (ref.kind) {
+      case EntityKind.Device:
+        return this.#devices.get(ref.id)?.name ?? ref.id;
+      case EntityKind.Datastream:
+        return this.#datastreams.get(ref.id)?.name ?? ref.id;
+      case EntityKind.Asset:
+        return this.#assets.get(ref.id)?.name ?? ref.id;
+      case EntityKind.Application:
+        return this.#applications.get(ref.id)?.name ?? ref.id;
+    }
+  }
+
+  private diagnosticGroupsForSnapshot(request: SnapshotRequest): SnapshotDiagnosticGroups {
+    const diagnostics: Record<SnapshotDiagnosticCategory, Record<string, Diagnostic[]>> = {
+      common: {},
+      device: {},
+      datastream: {},
+      application: {},
+      asset: {},
     };
+    if (request.target.scope !== 'all' && request.target.scope !== 'diagnostics') {
+      return diagnostics;
+    }
+
+    const selectedType =
+      request.target.scope === 'diagnostics' ? request.target.entityType : undefined;
+    const selectedSourceId =
+      request.target.scope === 'diagnostics' ? request.target.entityId : undefined;
+    for (const diagnostic of this.#diagnostics.records()) {
+      const category = diagnostic.category.toLowerCase() as SnapshotDiagnosticCategory;
+      if (selectedType !== undefined && category !== selectedType) {
+        continue;
+      }
+      if (selectedSourceId !== undefined && diagnostic.sourceId !== selectedSourceId) {
+        continue;
+      }
+      (diagnostics[category][diagnostic.sourceId] ??= []).push(diagnostic);
+    }
+    return diagnostics;
   }
 
   private toPersistence(): PersistedEngineSnapshot {
@@ -916,7 +1039,7 @@ export class Engine implements PersistenceMarker {
         asset.close();
       }
 
-      const store = this.dependencies.stateStore;
+      const store = this.#dependencies.stateStore;
       if (store === undefined) {
         throw new Error('Engine does not have a StateStore');
       }
@@ -987,7 +1110,7 @@ export class Engine implements PersistenceMarker {
   }
 
   private async removeObsoleteEntityKeys(): Promise<void> {
-    const store = this.dependencies.stateStore;
+    const store = this.#dependencies.stateStore;
     if (store === undefined) {
       return;
     }
@@ -1004,5 +1127,23 @@ export class Engine implements PersistenceMarker {
     const entityPrefix = `${engineStateKeyPrefix(this.id)}entity/`;
     const obsolete = (await store.keys(entityPrefix)).filter((key) => !expected.has(key));
     await Promise.all(obsolete.map((key) => store.delete(key)));
+  }
+
+  private purgeObsoleteDiagnostics(): void {
+    this.#diagnostics.clearMatching((diagnostic) => {
+      if (diagnostic.retention !== 'condition') {
+        return false;
+      }
+      if (diagnostic.source.engineId !== this.id) {
+        return true;
+      }
+      if (!('entityType' in diagnostic.source)) {
+        return false;
+      }
+      return !this.hasEntity({
+        kind: diagnostic.source.entityType,
+        id: diagnostic.source.entityId,
+      } as EntityRef);
+    });
   }
 }

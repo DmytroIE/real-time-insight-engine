@@ -10,9 +10,9 @@ import helper from 'node-red-node-test-helper';
 import { createIndustrialPluginRegistry } from '../src/plugin-registry';
 import {
   ENGINE_CONFIG_NODE_TYPE,
+  ENGINE_INPUT_NODE_TYPE,
   ENGINE_MESSAGE_RECEIVER_NODE_TYPE,
   ENGINE_STATE_SNAPSHOT_NODE_TYPE,
-  UG6X_INPUT_NODE_TYPE,
 } from '../src/node-types';
 
 type PackagedNodeInitializer = Extract<
@@ -24,7 +24,9 @@ const requireFromTest = createRequire(__filename);
 const registerIndustrialEngineNode = requireFromTest(
   '../nodes/industrial-engine.js',
 ) as PackagedNodeInitializer;
-const registerUg6xInputNode = requireFromTest('../nodes/ug6x-input.js') as PackagedNodeInitializer;
+const registerEngineInputNode = requireFromTest(
+  '../nodes/engine-input.js',
+) as PackagedNodeInitializer;
 const registerEngineMessageReceiverNode = requireFromTest(
   '../nodes/engine-message-receiver.js',
 ) as PackagedNodeInitializer;
@@ -33,6 +35,7 @@ const registerEngineStateSnapshotNode = requireFromTest(
 ) as PackagedNodeInitializer;
 
 interface NodeRedPackageManifest {
+  readonly version?: string;
   readonly 'node-red'?: {
     readonly version?: string;
     readonly nodes?: Readonly<Record<string, string>>;
@@ -66,37 +69,45 @@ describe('NR-01 Node-RED package discovery', () => {
   });
 
   it('declares discoverable runtime/editor entry points and loads all four node types', async () => {
+    expect(manifest.version).toBe('0.2.0');
     expect(manifest['node-red']?.version).toBe('>=3.0.2');
     const nodes = manifest['node-red']?.nodes;
     expect(nodes).toEqual({
-      'industrial-engine': 'nodes/industrial-engine.js',
-      'ug6x-input': 'nodes/ug6x-input.js',
+      'insight-engine': 'nodes/industrial-engine.js',
+      'engine-input': 'nodes/engine-input.js',
       'engine-message-receiver': 'nodes/engine-message-receiver.js',
       'engine-state-snapshot': 'nodes/engine-state-snapshot.js',
     });
     for (const runtimePath of Object.values(nodes ?? {})) {
       expect(existsSync(join(packageDirectory, runtimePath))).toBe(true);
-      expect(
-        existsSync(
-          join(
-            packageDirectory,
-            dirname(runtimePath),
-            `${runtimePath.split('/').at(-1)?.replace(/\.js$/, '')}.html`,
-          ),
-        ),
-      ).toBe(true);
+      const editorPath = join(
+        packageDirectory,
+        dirname(runtimePath),
+        `${runtimePath.split('/').at(-1)?.replace(/\.js$/, '')}.html`,
+      );
+      expect(existsSync(editorPath)).toBe(true);
+      const nodeType = Object.entries(nodes ?? {}).find(([, path]) => path === runtimePath)?.[0];
+      expect(readFileSync(editorPath, 'utf8')).toContain(`data-help-name="${nodeType}"`);
     }
+
+    const engineEditor = readFileSync(
+      join(packageDirectory, 'nodes/industrial-engine.html'),
+      'utf8',
+    );
+    expect(engineEditor).toContain('Device 1 - full');
+    expect(engineEditor).toContain('Device 2 - partial');
+    expect(engineEditor).toContain('Device 3 - defaults');
 
     await helper.load(
       [
         registerIndustrialEngineNode,
-        registerUg6xInputNode,
+        registerEngineInputNode,
         registerEngineMessageReceiverNode,
         registerEngineStateSnapshotNode,
       ],
       [
         { id: 'engine', type: ENGINE_CONFIG_NODE_TYPE },
-        { id: 'input', type: UG6X_INPUT_NODE_TYPE },
+        { id: 'input', type: ENGINE_INPUT_NODE_TYPE },
         { id: 'receiver', type: ENGINE_MESSAGE_RECEIVER_NODE_TYPE },
         { id: 'snapshot', type: ENGINE_STATE_SNAPSHOT_NODE_TYPE },
       ],

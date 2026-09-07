@@ -8,9 +8,13 @@ import {
   PluginRegistry,
   ProcessState,
   asApplicationId,
+  assetIdForName,
   asDeviceId,
   asEngineId,
   asPluginTypeId,
+  datastreamIdForNames,
+  deviceIdForName,
+  engineStateKeyPrefix,
   engineSnapshotKey,
   entityStateKey,
   type ApplicationPlugin,
@@ -62,10 +66,10 @@ const createPlugins = (applicationFails = false): PluginRegistry => {
   return plugins;
 };
 
-const configuration = (): EngineConfiguration => ({
+const configuration = (deviceName = 'device-1', assetName = 'asset-1'): EngineConfiguration => ({
   engineId: asEngineId('engine-1'),
   devices: {
-    'device-1': {
+    [deviceName]: {
       type: asPluginTypeId('sxs.test-device'),
       datastreams: {
         temperature: {
@@ -77,13 +81,13 @@ const configuration = (): EngineConfiguration => ({
     },
   },
   assets: {
-    'asset-1': {
+    [assetName]: {
       applications: [
         {
           id: 'application-1',
           type: asPluginTypeId('sxs.test-application'),
           runIntervalMs: 100,
-          datafeeds: { temperature: 'device-1/temperature' },
+          datafeeds: { temperature: datastreamIdForNames(deviceName, 'temperature') },
         },
       ],
     },
@@ -93,8 +97,9 @@ const configuration = (): EngineConfiguration => ({
 const createPersistentEngine = (
   store: InMemoryStateStore,
   applicationFails = false,
+  engineConfiguration = configuration(),
 ): Promise<Engine> =>
-  Engine.create(configuration(), {
+  Engine.create(engineConfiguration, {
     clock: new FakeClock(1_000, 0),
     timers: new FakeTimerScheduler(),
     plugins: createPlugins(applicationFails),
@@ -110,9 +115,7 @@ describe('STATE-02 restart restoration', () => {
 
     const restored = await createPersistentEngine(store);
     const snapshot = restored.snapshot({ target: { scope: 'all' } });
-    const application = snapshot.entities.find(
-      ({ entityType }) => entityType === EntityKind.Application,
-    );
+    const application = snapshot.entities.application['asset-1/application-1'];
 
     expect(application?.state).toMatchObject({
       lastRunTimestamp: 1_000,
@@ -120,9 +123,46 @@ describe('STATE-02 restart restoration', () => {
       appError: true,
       pluginState: { runs: 0 },
     });
-    expect(snapshot.diagnostics?.Application).toEqual([
+    expect(snapshot.diagnostics.application['asset-1/application-1']).toEqual([
       expect.objectContaining({ code: 'APPLICATION_EXECUTION_ERROR' }),
     ]);
+  });
+
+  it('restores Device and Asset state when names require encoded runtime IDs', async () => {
+    const store = new InMemoryStateStore();
+    const deviceName = 'Sensor / 3 South';
+    const assetName = 'Steam Trap / 1';
+    const engineConfiguration = configuration(deviceName, assetName);
+    const deviceId = deviceIdForName(deviceName);
+    const assetId = assetIdForName(assetName);
+    await createPersistentEngine(store, false, engineConfiguration);
+
+    const snapshotKey = engineSnapshotKey(engineConfiguration.engineId);
+    const persisted = await store.load<PersistedEngineSnapshot>(snapshotKey);
+    if (persisted === undefined) {
+      throw new Error('Expected initial persisted Engine snapshot');
+    }
+    await store.save(snapshotKey, {
+      ...persisted,
+      entityStates: {
+        ...persisted.entityStates,
+        devices: {
+          ...persisted.entityStates.devices,
+          [deviceId]: { lastUpdateTimestamp: 123, hwError: false },
+        },
+        assets: {
+          ...persisted.entityStates.assets,
+          [assetId]: { lastUpdateTimestamp: 456, currState: ProcessState.Undefined },
+        },
+      },
+    });
+
+    const restored = await createPersistentEngine(store, false, engineConfiguration);
+    const entities = restored.snapshot({ target: { scope: 'all' } }).entities;
+    expect(entities.device[deviceId]?.state).toMatchObject({
+      lastUpdateTimestamp: 123,
+    });
+    expect(entities.asset[assetId]?.state).toMatchObject({ lastUpdateTimestamp: 456 });
   });
 });
 
@@ -132,7 +172,8 @@ describe('STATE-03 empty storage cold start', () => {
 
     const engine = await createPersistentEngine(store);
 
-    expect(engine.snapshot({ target: { scope: 'all' } }).entities).toHaveLength(4);
+    const entities = engine.snapshot({ target: { scope: 'all' } }).entities;
+    expect(Object.values(entities).flatMap((group) => Object.values(group))).toHaveLength(4);
     await expect(
       store.load<PersistedEngineSnapshot>(engineSnapshotKey(asEngineId('engine-1'))),
     ).resolves.toMatchObject({
@@ -183,6 +224,29 @@ describe('STATE-04 obsolete entity cleanup', () => {
     await createPersistentEngine(store);
     await expect(store.load(obsoleteKey)).resolves.toBeUndefined();
   });
+
+  it('removes restored condition diagnostics for entities absent from the new configuration', async () => {
+    const store = new InMemoryStateStore();
+    const first = await createPersistentEngine(store, true);
+    await first.runApplication(asApplicationId('asset-1/application-1'));
+    await first.save();
+    const redeployed: EngineConfiguration = {
+      ...configuration(),
+      assets: { 'asset-1': { applications: [] } },
+    };
+
+    const engine = await Engine.create(redeployed, {
+      clock: new FakeClock(1_000, 0),
+      timers: new FakeTimerScheduler(),
+      plugins: createPlugins(),
+      stateStore: store,
+    });
+
+    expect(engine.snapshot({ target: { scope: 'all' } }).diagnostics.application).toEqual({});
+    await expect(
+      store.load<PersistedEngineSnapshot>(engineSnapshotKey(asEngineId('engine-1'))),
+    ).resolves.toMatchObject({ diagnostics: [] });
+  });
 });
 
 describe('STATE-05 plain persisted data', () => {
@@ -198,5 +262,16 @@ describe('STATE-05 plain persisted data', () => {
     expect(JSON.stringify(persisted)).not.toContain('isReady');
     expect(JSON.stringify(persisted)).not.toContain('readiness');
     expect(Object.getPrototypeOf(persisted)).toBe(Object.prototype);
+  });
+
+  it('deletes only its own persistence namespace when removed', async () => {
+    const store = new InMemoryStateStore();
+    const engine = await createPersistentEngine(store);
+    await store.save('engine/other-engine/snapshot', { retained: true });
+
+    await engine.deletePersistedState();
+
+    await expect(store.keys(engineStateKeyPrefix(asEngineId('engine-1')))).resolves.toEqual([]);
+    await expect(store.load('engine/other-engine/snapshot')).resolves.toEqual({ retained: true });
   });
 });
