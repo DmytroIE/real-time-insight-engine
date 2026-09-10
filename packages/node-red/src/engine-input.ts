@@ -41,14 +41,14 @@ export const normalizeEngineInput = (msg: NodeMessageInFlow): EngineIngestInput 
     issues.push('INVALID_RAW_PAYLOAD');
   }
   const timestamp = payload['timestamp'];
-  if (typeof timestamp !== 'number' || !Number.isFinite(timestamp)) {
+  if (typeof timestamp !== 'number' || !Number.isSafeInteger(timestamp)) {
     issues.push('INVALID_TIMESTAMP');
   }
 
   return {
     ...(typeof deviceName === 'string' && deviceName.trim() !== '' ? { deviceName } : {}),
     ...(isRecord(rawPayload) ? { rawPayload } : {}),
-    ...(typeof timestamp === 'number' && Number.isFinite(timestamp) ? { timestamp } : {}),
+    ...(typeof timestamp === 'number' && Number.isSafeInteger(timestamp) ? { timestamp } : {}),
     source: 'engine-input',
     issues,
   };

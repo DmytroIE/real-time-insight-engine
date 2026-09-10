@@ -183,9 +183,25 @@ const invokeSnapshot = async (
     createEngineStateSnapshotHandler(
       { status: vi.fn() } as unknown as Pick<Node, 'status'>,
       industrialNode(engine),
-      { target: { scope: 'all' } },
     )(
-      message,
+      {
+        ...message,
+        snapshotRequest: message['snapshotRequest'] ?? {
+          entities: [
+            { type: EntityKind.Device, ids: '*' },
+            { type: EntityKind.Datastream, ids: '*' },
+            { type: EntityKind.Application, ids: '*' },
+            { type: EntityKind.Asset, ids: '*' },
+          ],
+          diagnostics: [
+            { type: 'common', ids: '*' },
+            { type: EntityKind.Device, ids: '*' },
+            { type: EntityKind.Datastream, ids: '*' },
+            { type: EntityKind.Application, ids: '*' },
+            { type: EntityKind.Asset, ids: '*' },
+          ],
+        },
+      },
       (output) => {
         if (!Array.isArray(output)) {
           sent.push(output);
@@ -201,7 +217,22 @@ const invokeSnapshot = async (
 };
 
 const applicationId = asApplicationId('steam-trap-1/failed-closed');
-const allSnapshot = (engine: Engine) => engine.snapshot({ target: { scope: 'all' } });
+const allSnapshot = (engine: Engine) =>
+  engine.snapshot({
+    entities: [
+      { type: EntityKind.Device, ids: '*' },
+      { type: EntityKind.Datastream, ids: '*' },
+      { type: EntityKind.Application, ids: '*' },
+      { type: EntityKind.Asset, ids: '*' },
+    ],
+    diagnostics: [
+      { type: 'common', ids: '*' },
+      { type: EntityKind.Device, ids: '*' },
+      { type: EntityKind.Datastream, ids: '*' },
+      { type: EntityKind.Application, ids: '*' },
+      { type: EntityKind.Asset, ids: '*' },
+    ],
+  });
 const entity = (engine: Engine, entityType: EntityKind) =>
   Object.values(allSnapshot(engine).entities[entityType])[0];
 const diagnostics = (

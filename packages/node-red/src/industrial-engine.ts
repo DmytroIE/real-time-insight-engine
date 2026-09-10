@@ -5,6 +5,7 @@ import {
   type Clock,
   type EngineEvent,
   type PluginRegistry,
+  type StateStore,
   type TimerScheduler,
 } from '@sxs/industrial-core';
 import type { Node, NodeAPI, NodeDef } from 'node-red';
@@ -15,6 +16,7 @@ import { NodeRedContextStateStore } from './node-red-context-state-store';
 export interface IndustrialEngineNodeConfiguration extends NodeDef {
   readonly configuration: string | unknown;
   readonly contextStore?: string;
+  readonly cleanSessionRequestId?: string;
 }
 
 export interface IndustrialEngineNode extends Node {
@@ -30,6 +32,26 @@ export interface IndustrialEngineNodeRegistrationOptions {
 }
 
 export const PLUGIN_REGISTRY_CONTEXT_KEY = 'industrialEnginePluginRegistry';
+const cleanSessionMarkerKey = (engineId: string): string =>
+  `industrial-engine/clean-session/${engineId}`;
+
+export const consumeCleanSessionRequest = async (
+  store: StateStore,
+  engineId: ReturnType<typeof asEngineId>,
+  requestId: string | undefined,
+): Promise<boolean> => {
+  const normalizedRequestId = requestId?.trim();
+  if (normalizedRequestId === undefined || normalizedRequestId.length === 0) {
+    return false;
+  }
+  const markerKey = cleanSessionMarkerKey(engineId);
+  if ((await store.load<string>(markerKey)) === normalizedRequestId) {
+    return false;
+  }
+  await Engine.deletePersistedState(engineId, store);
+  await store.save(markerKey, normalizedRequestId);
+  return true;
+};
 
 const resolvePluginRegistryFactory = (
   RED: NodeAPI,
@@ -110,7 +132,7 @@ const resolveContextStore = (
   if (requestedStoreName === undefined || requestedStoreName.length === 0) {
     return {
       storeName: defaultStoreName,
-      warning: 'The Context store is empty; using the Node-RED default context store',
+      warning: 'The "Context store" input field is empty; using the Node-RED default context store',
     };
   }
 
@@ -180,11 +202,18 @@ export const registerIndustrialEngineNode = (
       if (contextStore.warning !== undefined) {
         this.warn(contextStore.warning);
       }
+      const stateStore = new NodeRedContextStateStore(this.context(), contextStore.storeName);
+      const cleanSession = await consumeCleanSessionRequest(
+        stateStore,
+        configuration.engineId,
+        config.cleanSessionRequestId,
+      );
       const engine = await (options?.createEngine ?? Engine.create)(configuration, {
         clock: options?.clock ?? systemClock,
         timers: options?.timers ?? systemTimers,
         plugins,
-        stateStore: new NodeRedContextStateStore(this.context(), contextStore.storeName),
+        stateStore,
+        cleanSession,
         lifecycleListener: (event) => {
           const status = statusForLifecycle(event);
           if (status !== undefined) {
@@ -193,6 +222,9 @@ export const registerIndustrialEngineNode = (
         },
       });
       this.engine = engine;
+      if (cleanSession) {
+        this.warn('Insight Engine started with a clean session; persisted state was cleared');
+      }
       this.status(statusForContextStore(contextStore));
       return engine;
     };

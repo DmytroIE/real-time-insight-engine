@@ -1,10 +1,9 @@
 import {
-  asEngineId,
-  asPluginTypeId,
   EntityKind,
   SnapshotRequestError,
   type Engine,
-  type EntityEventSource,
+  type DiagnosticSnapshotSelector,
+  type EntitySnapshotSelector,
   type SnapshotRequest,
 } from '@sxs/industrial-core';
 import type { Node, NodeAPI, NodeDef, NodeMessage, NodeMessageInFlow } from 'node-red';
@@ -14,14 +13,10 @@ import { ENGINE_STATE_SNAPSHOT_NODE_TYPE } from './node-types';
 
 export interface EngineStateSnapshotNodeConfiguration extends NodeDef {
   readonly engine: string;
-  readonly snapshotRequest?: string | unknown;
 }
 
 type Send = (msg: NodeMessage | Array<NodeMessage | NodeMessage[] | null>) => void;
 type Done = (error?: Error) => void;
-
-const DEFAULT_SNAPSHOT_REQUEST: SnapshotRequest = { target: { scope: 'all' } };
-const snapshotRelations = new Set(['self', 'parent', 'children', 'family']);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -29,82 +24,105 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isEntityKind = (value: unknown): value is EntityKind =>
   Object.values(EntityKind).includes(value as EntityKind);
 
-const isDiagnosticEntityType = (value: unknown): value is EntityKind | 'common' =>
+const isDiagnosticType = (value: unknown): value is EntityKind | 'common' =>
   value === 'common' || isEntityKind(value);
 
-export const parseSnapshotRequest = (value: unknown): SnapshotRequest => {
-  const request = typeof value === 'string' ? (JSON.parse(value) as unknown) : value;
-  if (!isRecord(request) || !isRecord(request['target'])) {
-    throw new SnapshotRequestError('Snapshot request must contain a target');
+const parseIds = (value: unknown, selectorName: string): string | readonly string[] | '*' => {
+  if (value === '*') {
+    return value;
   }
-  const target = request['target'];
-  const scope = target['scope'];
-  if (scope === 'entities' || scope === 'diagnostics') {
-    const entityType = target['entityType'];
-    const entityId = target['entityId'];
-    if (entityId !== undefined && typeof entityId !== 'string') {
-      throw new SnapshotRequestError('Snapshot target entityId must be a string');
-    }
-    if (entityId !== undefined && entityType === undefined) {
-      throw new SnapshotRequestError('Snapshot target entityId requires entityType');
-    }
-    const validType =
-      scope === 'entities' ? isEntityKind(entityType) : isDiagnosticEntityType(entityType);
-    if (entityType !== undefined && !validType) {
-      throw new SnapshotRequestError('Snapshot target entityType is invalid');
-    }
-    if (
-      scope === 'diagnostics' &&
-      (request['relations'] !== undefined ||
-        request['statePaths'] !== undefined ||
-        request['strictPaths'] !== undefined)
-    ) {
-      throw new SnapshotRequestError(
-        'Snapshot diagnostics target does not support relations or state paths',
-      );
-    }
-  } else if (scope !== 'eventSource' && scope !== 'all') {
-    throw new SnapshotRequestError('Snapshot target scope is invalid');
+  if (typeof value === 'string') {
+    return value;
   }
-  if (
-    request['relations'] !== undefined &&
-    (typeof request['relations'] !== 'string' || !snapshotRelations.has(request['relations']))
-  ) {
-    throw new SnapshotRequestError('Snapshot relations value is invalid');
+  if (Array.isArray(value) && value.length > 0 && value.every((id) => typeof id === 'string')) {
+    return value;
   }
-  if (
-    request['statePaths'] !== undefined &&
-    (!Array.isArray(request['statePaths']) ||
-      !request['statePaths'].every((path) => typeof path === 'string'))
-  ) {
-    throw new SnapshotRequestError('Snapshot statePaths must be an array of strings');
-  }
-  if (request['strictPaths'] !== undefined && typeof request['strictPaths'] !== 'boolean') {
-    throw new SnapshotRequestError('Snapshot strictPaths must be boolean');
-  }
-  return request as unknown as SnapshotRequest;
+  throw new SnapshotRequestError(
+    `${selectorName} ids must be a string, nonempty string array, or "*"`,
+  );
 };
 
-const eventSourceFromMessage = (msg: NodeMessageInFlow): EntityEventSource | undefined => {
-  const event = msg['event'];
-  if (!isRecord(event) || !isRecord(event['source'])) {
+const parseOptionalBoolean = (value: unknown, property: string): boolean | undefined => {
+  if (value === undefined) {
     return undefined;
   }
-  const source = event['source'];
-  if (
-    typeof source['engineId'] !== 'string' ||
-    !isEntityKind(source['entityType']) ||
-    typeof source['entityId'] !== 'string'
-  ) {
-    return undefined;
+  if (typeof value !== 'boolean') {
+    throw new SnapshotRequestError(`Snapshot selector ${property} must be boolean`);
+  }
+  return value;
+};
+
+const parseEntitySelectors = (value: unknown): readonly EntitySnapshotSelector[] => {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new SnapshotRequestError('Snapshot entities must be a nonempty selector array');
+  }
+  return value.map((selector) => {
+    if (!isRecord(selector) || !isEntityKind(selector['type'])) {
+      throw new SnapshotRequestError('Snapshot entity selector type is invalid');
+    }
+    const statePaths = selector['statePaths'];
+    if (
+      statePaths !== undefined &&
+      (!Array.isArray(statePaths) || !statePaths.every((path) => typeof path === 'string'))
+    ) {
+      throw new SnapshotRequestError(
+        'Snapshot entity selector statePaths must be an array of strings',
+      );
+    }
+    const parent = parseOptionalBoolean(selector['parent'], 'parent');
+    const children = parseOptionalBoolean(selector['children'], 'children');
+    const datafeeds = parseOptionalBoolean(selector['datafeeds'], 'datafeeds');
+    return {
+      type: selector['type'],
+      ids: parseIds(selector['ids'], 'Snapshot entity selector'),
+      ...(parent === undefined ? {} : { parent }),
+      ...(children === undefined ? {} : { children }),
+      ...(datafeeds === undefined ? {} : { datafeeds }),
+      ...(statePaths === undefined ? {} : { statePaths }),
+    };
+  });
+};
+
+const parseDiagnosticSelectors = (value: unknown): readonly DiagnosticSnapshotSelector[] => {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new SnapshotRequestError('Snapshot diagnostics must be a nonempty selector array');
+  }
+  return value.map((selector) => {
+    if (!isRecord(selector) || !isDiagnosticType(selector['type'])) {
+      throw new SnapshotRequestError('Snapshot diagnostic selector type is invalid');
+    }
+    if (
+      selector['parent'] !== undefined ||
+      selector['children'] !== undefined ||
+      selector['datafeeds'] !== undefined ||
+      selector['statePaths'] !== undefined
+    ) {
+      throw new SnapshotRequestError('Snapshot diagnostic selectors do not support entity options');
+    }
+    return {
+      type: selector['type'],
+      ids: parseIds(selector['ids'], 'Snapshot diagnostic selector'),
+    };
+  });
+};
+
+export const parseSnapshotRequest = (value: unknown): SnapshotRequest => {
+  if (!isRecord(value) || typeof value === 'string') {
+    throw new SnapshotRequestError('Snapshot request must be an object');
+  }
+  if (value['entities'] === undefined && value['diagnostics'] === undefined) {
+    throw new SnapshotRequestError('Snapshot request needs entities or diagnostics selectors');
+  }
+  if (Object.keys(value).some((key) => key !== 'entities' && key !== 'diagnostics')) {
+    throw new SnapshotRequestError('Snapshot request contains an unsupported property');
   }
   return {
-    engineId: asEngineId(source['engineId']),
-    entityType: source['entityType'],
-    entityId: source['entityId'] as EntityEventSource['entityId'],
-    ...(typeof source['pluginType'] === 'string'
-      ? { pluginType: asPluginTypeId(source['pluginType']) }
-      : {}),
+    ...(value['entities'] === undefined
+      ? {}
+      : { entities: parseEntitySelectors(value['entities']) }),
+    ...(value['diagnostics'] === undefined
+      ? {}
+      : { diagnostics: parseDiagnosticSelectors(value['diagnostics']) }),
   };
 };
 
@@ -112,7 +130,6 @@ export const createEngineStateSnapshotHandler =
   (
     node: Pick<Node, 'status'>,
     engineNode: IndustrialEngineNode | undefined,
-    configuredRequest: string | unknown = DEFAULT_SNAPSHOT_REQUEST,
   ): ((msg: NodeMessageInFlow, send: Send, done: Done) => void) =>
   (msg, send, done) => {
     void (async () => {
@@ -120,10 +137,8 @@ export const createEngineStateSnapshotHandler =
         throw new SnapshotRequestError('Configured Industrial Engine node is unavailable');
       }
       const engine: Engine = await engineNode.ready;
-      const request = parseSnapshotRequest(
-        msg['snapshotRequest'] === undefined ? configuredRequest : msg['snapshotRequest'],
-      );
-      msg['snapshot'] = engine.snapshot(request, eventSourceFromMessage(msg));
+      const request = parseSnapshotRequest(msg['snapshotRequest']);
+      msg['snapshot'] = engine.snapshot(request);
       node.status({ fill: 'green', shape: 'dot', text: 'snapshot ready' });
       send(msg);
       done();
@@ -138,14 +153,7 @@ export const registerEngineStateSnapshotNode = (RED: NodeAPI): void => {
   function EngineStateSnapshotNode(this: Node, config: EngineStateSnapshotNodeConfiguration): void {
     RED.nodes.createNode(this, config);
     const engineNode = RED.nodes.getNode(config.engine) as IndustrialEngineNode | null;
-    this.on(
-      'input',
-      createEngineStateSnapshotHandler(
-        this,
-        engineNode ?? undefined,
-        config.snapshotRequest ?? DEFAULT_SNAPSHOT_REQUEST,
-      ),
-    );
+    this.on('input', createEngineStateSnapshotHandler(this, engineNode ?? undefined));
   }
 
   RED.nodes.registerType(ENGINE_STATE_SNAPSHOT_NODE_TYPE, EngineStateSnapshotNode);

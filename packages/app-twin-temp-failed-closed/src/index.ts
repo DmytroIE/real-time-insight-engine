@@ -86,8 +86,7 @@ const evaluate = (
 
   if (tempInAvg === null || tempOutAvg === null) {
     const noDataError =
-      context.timestamp - context.sessionStartTs >= settings.windowSizeMs ||
-      context.previousNoDataError;
+      context.timestamp - context.sessionStartTs >= settings.windowSizeMs || context.noDataError;
     if (noDataError) {
       context.diagnostics.report({
         code: 'NO_DATA',
@@ -95,7 +94,12 @@ const evaluate = (
         message: 'Required temperature averages are unavailable',
       });
     }
-    return { state, noDataError };
+    return {
+      pluginState: state,
+      currState: ProcessState.Undefined,
+      noDataError,
+      appError: false,
+    };
   }
 
   if (tempOutAvg.value - tempInAvg.value > settings.tempDiffMargin) {
@@ -109,11 +113,21 @@ const evaluate = (
         margin: settings.tempDiffMargin,
       },
     });
-    return { state, appError: true };
+    return {
+      pluginState: state,
+      currState: ProcessState.Undefined,
+      noDataError: false,
+      appError: true,
+    };
   }
 
   if (tempInAvg.value < settings.offThreshold) {
-    return { state: { ...state, operState: OperatingState.Off } };
+    return {
+      pluginState: { ...state, operState: OperatingState.Off },
+      currState: ProcessState.Undefined,
+      noDataError: false,
+      appError: false,
+    };
   }
 
   if (tempInAvg.value - tempOutAvg.value > settings.tempDiffThreshold) {
@@ -128,14 +142,18 @@ const evaluate = (
       },
     });
     return {
-      state: { ...state, operState: OperatingState.On },
+      pluginState: { ...state, operState: OperatingState.On },
       currState: ProcessState.Warning,
+      noDataError: false,
+      appError: false,
     };
   }
 
   return {
-    state: { ...state, operState: OperatingState.On },
+    pluginState: { ...state, operState: OperatingState.On },
     currState: ProcessState.Ok,
+    noDataError: false,
+    appError: false,
   };
 };
 

@@ -19,7 +19,7 @@ export interface ApplicationTaskResult {
 
 export interface ApplicationSchedulerOptions {
   readonly batchSize?: number;
-  readonly retryDelayMs?: number;
+  readonly failureRetryDelayMs?: number;
 }
 
 export class ApplicationScheduler {
@@ -135,7 +135,7 @@ export class ApplicationScheduler {
   private deferRetry(task: ApplicationTask, now: number): void {
     this.#retryAfter.set(
       task.id,
-      now + (this.#options.retryDelayMs ?? DEFAULT_APPLICATION_TASK_RETRY_DELAY_MS),
+      now + (this.#options.failureRetryDelayMs ?? DEFAULT_APPLICATION_TASK_RETRY_DELAY_MS),
     );
   }
 

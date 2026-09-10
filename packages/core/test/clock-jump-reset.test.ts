@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   Engine,
+  EntityKind,
   InMemoryStateStore,
   PluginRegistry,
   ProcessState,
@@ -44,9 +45,11 @@ const createPlugins = (): PluginRegistry => {
     defaultSettings: {},
     defaultState: { runs: 0 },
     create: () => ({
-      evaluate: ({ state }: ApplicationEvaluationContext<{ runs: number }>) => ({
-        state: { runs: state.pluginState.runs + 1 },
+      evaluate: ({ pluginState }: ApplicationEvaluationContext<{ runs: number }>) => ({
+        pluginState: { runs: pluginState.runs + 1 },
         currState: ProcessState.Ok,
+        noDataError: false,
+        appError: false,
       }),
     }),
   };
@@ -193,7 +196,12 @@ describe('CLOCK-03 cold state rebuild', () => {
 
     await engine.checkClock();
 
-    const snapshot = engine.snapshot({ target: { scope: 'all' } });
+    const snapshot = engine.snapshot({
+      entities: [
+        { type: EntityKind.Application, ids: '*' },
+        { type: EntityKind.Datastream, ids: '*' },
+      ],
+    });
     const application = snapshot.entities.application['asset-1/application-1'];
     const datastream = snapshot.entities.datastream['device-1/temperature'];
     expect(application?.state).toMatchObject({
@@ -225,7 +233,7 @@ describe('CLOCK-04 successful reset lifecycle', () => {
     ]);
     expect(
       engine
-        .snapshot({ target: { scope: 'all' } })
+        .snapshot({ diagnostics: [{ type: 'common', ids: '*' }] })
         .diagnostics.common['engine-1']?.map(({ code }) => code),
     ).toEqual(['SYSTEM_STARTED', 'CLOCK_JUMP_RESET']);
   });

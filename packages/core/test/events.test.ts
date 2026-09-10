@@ -6,7 +6,7 @@ const lifecycleEvent = (engineId: string, timestamp: number): EngineEvent => ({
   type: 'engine.lifecycle',
   timestamp,
   source: { engineId: asEngineId(engineId) },
-  data: { state: 'starting', ready: false, sessionId: 'session-1' },
+  data: { state: 'starting', ready: false, sessionId: 'session-1', cleanSession: false },
 });
 
 describe('EVT-01 Engine event delivery', () => {

@@ -66,7 +66,7 @@ describe('ASSET-01 empty Asset defaults', () => {
     const { asset } = setup();
 
     expect(asset.state()).toEqual({ lastUpdateTimestamp: 0, currState: ProcessState.Undefined });
-    expect(asset.chldError).toBe(false);
+    expect(asset.childrenError).toBe(false);
     expect(asset.hasError).toBe(false);
   });
 });
@@ -112,7 +112,7 @@ describe('ASSET-03 Application error aggregation', () => {
     asset.registerApplication(second);
 
     asset.recompute();
-    expect(asset.chldError).toBe(true);
+    expect(asset.childrenError).toBe(true);
     expect(asset.hasError).toBe(true);
     first.currentState = applicationState(ProcessState.Ok);
     second.currentState = applicationState(ProcessState.Warning, false, true);

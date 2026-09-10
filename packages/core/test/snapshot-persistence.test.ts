@@ -114,7 +114,10 @@ describe('STATE-02 restart restoration', () => {
     await first.save();
 
     const restored = await createPersistentEngine(store);
-    const snapshot = restored.snapshot({ target: { scope: 'all' } });
+    const snapshot = restored.snapshot({
+      entities: [{ type: EntityKind.Application, ids: '*' }],
+      diagnostics: [{ type: EntityKind.Application, ids: '*' }],
+    });
     const application = snapshot.entities.application['asset-1/application-1'];
 
     expect(application?.state).toMatchObject({
@@ -158,7 +161,12 @@ describe('STATE-02 restart restoration', () => {
     });
 
     const restored = await createPersistentEngine(store, false, engineConfiguration);
-    const entities = restored.snapshot({ target: { scope: 'all' } }).entities;
+    const entities = restored.snapshot({
+      entities: [
+        { type: EntityKind.Device, ids: '*' },
+        { type: EntityKind.Asset, ids: '*' },
+      ],
+    }).entities;
     expect(entities.device[deviceId]?.state).toMatchObject({
       lastUpdateTimestamp: 123,
     });
@@ -172,7 +180,14 @@ describe('STATE-03 empty storage cold start', () => {
 
     const engine = await createPersistentEngine(store);
 
-    const entities = engine.snapshot({ target: { scope: 'all' } }).entities;
+    const entities = engine.snapshot({
+      entities: [
+        { type: EntityKind.Device, ids: '*' },
+        { type: EntityKind.Datastream, ids: '*' },
+        { type: EntityKind.Application, ids: '*' },
+        { type: EntityKind.Asset, ids: '*' },
+      ],
+    }).entities;
     expect(Object.values(entities).flatMap((group) => Object.values(group))).toHaveLength(4);
     await expect(
       store.load<PersistedEngineSnapshot>(engineSnapshotKey(asEngineId('engine-1'))),
@@ -242,7 +257,10 @@ describe('STATE-04 obsolete entity cleanup', () => {
       stateStore: store,
     });
 
-    expect(engine.snapshot({ target: { scope: 'all' } }).diagnostics.application).toEqual({});
+    expect(
+      engine.snapshot({ diagnostics: [{ type: EntityKind.Application, ids: '*' }] }).diagnostics
+        .application,
+    ).toEqual({});
     await expect(
       store.load<PersistedEngineSnapshot>(engineSnapshotKey(asEngineId('engine-1'))),
     ).resolves.toMatchObject({ diagnostics: [] });

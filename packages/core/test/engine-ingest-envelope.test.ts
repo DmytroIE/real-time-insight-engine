@@ -56,7 +56,9 @@ describe('normalized Engine ingestion envelope', () => {
 
     expect(parse).not.toHaveBeenCalled();
     expect(
-      engine.snapshot({ target: { scope: 'all' } }).diagnostics.common['engine-1'],
+      engine.snapshot({ diagnostics: [{ type: 'common', ids: '*' }] }).diagnostics.common[
+        'engine-1'
+      ],
     ).toContainEqual(
       expect.objectContaining({
         sourceId: 'engine-1',
@@ -84,7 +86,9 @@ describe('normalized Engine ingestion envelope', () => {
       expect.objectContaining({ sourceTimestamp: 2_100, receivedTimestamp: 2_000 }),
     );
     expect(
-      engine.snapshot({ target: { scope: 'all' } }).diagnostics.common['engine-1'] ?? [],
+      engine.snapshot({ diagnostics: [{ type: 'common', ids: '*' }] }).diagnostics.common[
+        'engine-1'
+      ] ?? [],
     ).not.toContainEqual(
       expect.objectContaining({
         sourceId: 'engine-1',
@@ -113,7 +117,9 @@ describe('normalized Engine ingestion envelope', () => {
 
     expect(parse).not.toHaveBeenCalled();
     expect(
-      engine.snapshot({ target: { scope: 'all' } }).diagnostics.common['engine-1'],
+      engine.snapshot({ diagnostics: [{ type: 'common', ids: '*' }] }).diagnostics.common[
+        'engine-1'
+      ],
     ).toContainEqual(
       expect.objectContaining({
         sourceId: 'engine-1',
@@ -121,5 +127,22 @@ describe('normalized Engine ingestion envelope', () => {
         code: deviceId === undefined ? 'INVALID_INGEST_ENVELOPE' : 'DEVICE_NOT_RECOGNIZED',
       }),
     );
+  });
+
+  it('rejects fractional timestamps without parsing', async () => {
+    const engine = createEngine();
+    parse.mockClear();
+
+    await expect(
+      engine.ingest({
+        deviceName: 'device-1',
+        rawPayload: {},
+        timestamp: 2_000.5,
+        source: 'engine-input',
+        issues: [],
+      }),
+    ).resolves.toBe(false);
+
+    expect(parse).not.toHaveBeenCalled();
   });
 });

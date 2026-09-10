@@ -203,6 +203,7 @@ Responsibilities:
 - load registered plugins;
 - construct devices, datastreams, assets, and applications;
 - restore and periodically persist state;
+- consume an optional one-shot clean-session deployment request before restoring state;
 - own the application and stale-datastream schedulers;
 - own an engine-scoped typed event bus and a read-only instance registry;
 - expose authoritative lifecycle state and publish replayable readiness transitions;
@@ -230,7 +231,7 @@ interface EngineInputPayload {
 }
 ```
 
-`timestamp` is the upstream-normalized Unix epoch milliseconds at which the reading occurred and becomes the Datastream sample time. The Engine obtains its internal receipt time from its injected clock before it invokes the Device parser. Source transformation belongs in visible Node-RED Function or Change nodes, so device plugins receive only `rawPayload` and are independent of gateway message layout.
+`timestamp` is the upstream-normalized safe integer Unix epoch milliseconds at which the reading occurred and becomes the Datastream sample time. The Engine obtains its internal receipt time from its injected clock before it invokes the Device parser. Source transformation belongs in visible Node-RED Function or Change nodes, so device plugins receive only `rawPayload` and are independent of gateway message layout.
 
 Missing or invalid `deviceName`, `rawPayload`, or `timestamp` are recorded as issues on the envelope. The Engine rejects the envelope before device parsing and raises the Common `INVALID_INGEST_ENVELOPE` diagnostic. The Engine Message Receiver can deliver that diagnostic through its normal `diagnostic.*` subscription. A valid configured name that does not identify a Device raises `DEVICE_NOT_RECOGNIZED` instead.
 
@@ -297,30 +298,38 @@ This regular request/response node references the same Engine config node, has o
 Engine Message Receiver -> request logic -> Engine State Snapshot -> consumer logic
 ```
 
-For common fixed queries, the request can be configured directly in the node editor, avoiding the first Function node. A dynamic `msg.snapshotRequest` overrides those defaults. The initial request contract should support:
+An upstream Function or Change node creates a serializable `msg.snapshotRequest`; the Snapshot node has no configured request. The request contract supports independent entity and diagnostic selector arrays:
 
 ```ts
+type SnapshotIds = string | string[] | '*';
+
+interface EntitySnapshotSelector {
+  type: EntityType;
+  ids: SnapshotIds;
+  parent?: boolean;
+  children?: boolean;
+  datafeeds?: boolean;
+  statePaths?: string[];
+}
+
+interface DiagnosticSnapshotSelector {
+  type: EntityType | 'common';
+  ids: SnapshotIds;
+}
+
 interface SnapshotRequest {
-  target:
-    | { scope: 'eventSource' }
-    | { scope: 'entities'; entityType?: EntityType; entityId?: string }
-    | { scope: 'diagnostics'; entityType?: EntityType | 'common'; entityId?: string }
-    | { scope: 'all' };
-  relations?: 'self' | 'parent' | 'children' | 'family';
-  statePaths?: string[]; // Omit for complete state.
-  strictPaths?: boolean; // Default false.
+  entities?: EntitySnapshotSelector[];
+  diagnostics?: DiagnosticSnapshotSelector[];
 }
 ```
 
-`eventSource` resolves `msg.event.source`; `entities` returns all entities or optionally filters by type and ID; `diagnostics` returns active diagnostics or optionally filters by category and source ID; `all` returns both every Device, Datastream, Application, and Asset view and every diagnostic category. An ID filter requires a type/category filter. `family` includes the selected entity plus direct parent and children. The response indexes entity views by lowercase entity type and runtime ID, for example `entities.datastream["Device%201/temp1"]`, and diagnostics by lowercase category and source ID, for example `diagnostics.datastream["Device%201/temp1"]`. Every group key is present even when empty. State projections and relations apply to entity views only; a diagnostics request rejects `relations`, `statePaths`, and `strictPaths`. Use simple validated dotted paths rather than executing arbitrary JSONata or JavaScript in the core.
-
-A requested state path absent from an otherwise valid entity is omitted from that entity's projected state and reported in `msg.snapshot.missingPaths`, including the entity reference and path. This is not the same as a missing plugin: a configured plugin type that is not registered fails Engine startup before readiness. With `strictPaths = true`, any missing path fails the Snapshot request through `done(error)` and produces no partial output; use strict mode for consumers whose contract requires every requested value.
+Every selector requires a concrete type and `ids`, which may be one runtime ID, a nonempty ID array, or `'*'`. The wildcard is permitted only for `ids`; omitted IDs and wildcard types are invalid. Entity selectors always include their directly selected entities and may additionally include the direct parent, children, and Application datafeeds with boolean flags. Missing relationships do not fail the request. Multiple selectors are unioned, and an entity appears once; a complete-state selection overrides a projected selection for that entity. State paths apply to all entities selected or expanded by that selector, and unavailable paths are omitted without an error. Diagnostic selectors accept no entity options. The response indexes entity views by lowercase entity type and runtime ID, for example `entities.datastream["Device%201/temp1"]`, and diagnostics by lowercase category and source ID, for example `diagnostics.datastream["Device%201/temp1"]`. Every group key is present even when empty. Use simple validated dotted paths rather than executing arbitrary JSONata or JavaScript in the core.
 
 Every response is a deep serializable copy/DTO. It contains no methods, timers, event emitters, or mutable references to Engine objects. A missing entity or invalid request is passed to `done(error)` and does not mutate Engine state.
 
 ### Engine readiness and Gatekeeper flows
 
-Readiness is a level state owned by the Engine, not only a one-time event. The Engine exposes `isReady` internally and has a lifecycle state of `starting`, `ready`, `resetting`, `failed`, or `stopping`. Only `ready` maps to `isReady = true`.
+Readiness is a level state owned by the Engine, not only a one-time event. The Engine exposes `isReady` internally and has a lifecycle state of `starting`, `ready`, `resetting`, `failed`, or `stopping`. Lifecycle event data is a TypeScript discriminated union: `state: "ready"` always pairs with `ready: true`, and every other state pairs with `ready: false`.
 
 Every lifecycle transition is published on the internal bus and converted by Engine Message Receiver to a lightweight message:
 
@@ -334,13 +343,14 @@ Every lifecycle transition is published on the internal bus and converted by Eng
     "data": {
       "state": "ready",
       "ready": true,
-      "sessionId": "1788100000000"
+      "sessionId": "1788100000000",
+      "cleanSession": false
     }
   }
 }
 ```
 
-The transition into `ready` additionally emits the convenient `engine.ready` event with the same `data.ready = true`. Transitions into `starting`, `resetting`, `failed`, or `stopping` publish `engine.lifecycle` with `data.ready = false`, allowing gates to close again. Engine Message Receiver must immediately emit a synthetic `engine.lifecycle` message containing the current state when it subscribes, even if the transition occurred earlier. This replay makes readiness safe across Node-RED node creation order and partial deployments.
+The transition into `ready` additionally emits the convenient `engine.ready` event with the same `data.ready = true`. `data.cleanSession` is true only for a deployment requested through the one-shot clean-session control. Transitions into `starting`, `resetting`, `failed`, or `stopping` publish `engine.lifecycle` with `data.ready = false`, allowing gates to close again. Engine Message Receiver must immediately emit a synthetic `engine.lifecycle` message containing the current state when it subscribes, even if the transition occurred earlier. This replay makes readiness safe across Node-RED node creation order and partial deployments.
 
 A Gatekeeper flow may store `msg.event.data.ready` in memory-only flow or global context, keyed by Engine ID, and allow work only when the value is exactly `true`. `undefined` must be treated as `false`. Use flow context when all gated nodes are on one tab and global context when multiple tabs need the bit; do not persist this runtime flag in `ieps`, because a value restored as `true` after restart would be unsafe. The lifecycle receiver should listen to `engine.lifecycle`, not only `engine.ready`, so it observes both opening and closing transitions.
 
@@ -408,6 +418,8 @@ Do not retain a permanent five-second full scan as the long-term design. Maintai
 For an initial behavior-preserving migration, the existing `getAppsWithSmallestNextRunTs` and `getDssWithSmallestNextUpdTs` scans can be kept behind an internal scheduler. Replace them with a priority queue only after parity tests pass. At the likely UG65 scale, correctness and clean lifecycle management matter more than early optimization.
 
 Applications and Datastream stale checks are two independent scheduling domains. Every configured Datastream participates in the stale scheduler, including one not mapped to an Application. Its `nextUpdTs` is based on its own update/stale interval; therefore a Datastream can become stale and update its parent Device before any Application is due. An Application run still performs an immediate stale check on each required Datastream before evaluation, but this defensive check never replaces or reschedules the independent Datastream task.
+
+Top-level `applicationScheduler` and `datastreamStaleScheduler` configuration may each set positive safe-integer `batchSize` and `failureRetryDelayMs` values. Both schedulers default to a batch size of `3` and a retry delay of `1000` milliseconds.
 
 Use a monotonic clock for elapsed-time scheduling where Node.js provides one, while retaining Unix epoch milliseconds for persisted timestamps and output events. Define behavior for ordinary restart explicitly:
 
@@ -526,19 +538,19 @@ Use explicit base-state fields and deterministic parent aggregation:
 - `Device.hwError` represents a fault of the Device itself.
 - `Datastream.hwError` represents invalid or fault-signalling sensor data; `Datastream.noDataError` represents stale or absent data.
 - `Datastream.hasError = Datastream.hwError || Datastream.noDataError`.
-- `Device.chldError = any child Datastream.hasError`; `Device.hasError = Device.hwError || Device.chldError`.
+- `Device.childrenError = any child Datastream.hasError`; `Device.hasError = Device.hwError || Device.childrenError`.
 - `Application.currState` defaults to `Undefined` (`0`), and all Application error booleans default to `false`.
 - `Application.noDataError` is true when required input data is unavailable or stale.
 - `Application.appError` intentionally combines invalid domain/input data that prevents a valid calculation and an exception caught while executing the application plugin. The diagnostic codes distinguish those causes even though the compatibility boolean is shared.
 - `Asset.currState` is the maximum `currState` among its direct Applications, using the declared process-state ordering; with no Applications it uses the validated default state.
 - `Application.hasError = Application.noDataError || Application.appError`.
-- `Asset.chldError = any child Application.hasError`; `Asset.hasError = Asset.chldError`.
+- `Asset.childrenError = any child Application.hasError`; `Asset.hasError = Asset.childrenError`.
 
-`chldError` and `hasError` are derived getters, not persisted state. Parent recomputation uses the same values to decide whether an update event and persistence marking are needed. Datastream-to-Device and Application-to-Asset propagation uses the coalesced parent recomputation described above. A child clearing its final error therefore clears the parent aggregate on the next recomputation. Parent aggregate booleans do not create, copy, or own child diagnostics; diagnostics remain attached to their original source and owner scope. A Device's own `hwError` diagnostic is likewise separate from its `hasError` summary.
+`childrenError` and `hasError` are derived getters, not persisted state. Snapshot views include `hasError` for every entity and `childrenError` for Devices and Assets. Parent recomputation uses the same values to decide whether an update event and persistence marking are needed. Datastream-to-Device and Application-to-Asset propagation uses the coalesced parent recomputation described above. A child clearing its final error therefore clears the parent aggregate on the next recomputation. Parent aggregate booleans do not create, copy, or own child diagnostics; diagnostics remain attached to their original source and owner scope. A Device's own `hwError` diagnostic is likewise separate from its `hasError` summary.
 
-Immediately before every Application evaluation, the base runner resets its common result fields to their defaults: `currState = Undefined (0)`, `noDataError = false`, and `appError = false`. It then refreshes the stale status of every required Datastream and invokes the plugin. The plugin may set `currState`, `noDataError`, or `appError` as part of a completed evaluation.
+Before every Application evaluation, the base runner updates its run scheduling metadata and refreshes the stale status of every required Datastream. The evaluator receives the prior `currState`, `noDataError`, `appError`, and cloned `pluginState`, allowing a plugin to apply its own domain-specific grace and transition rules.
 
-If plugin execution throws, the common result for that run remains `currState = Undefined (0)` and `noDataError = false`, while the runner sets only `appError = true` and raises/updates its execution diagnostic. It must not restore the previous common result. Plugin-specific state fields are unchanged unless the plugin returned a complete successful result; implementations should preferably calculate into a temporary result and commit atomically so a throw cannot leave partial state. On the next run, the common fields are reset again before evaluation. Every completed run, successful or failed, requests Asset recomputation so `Asset.currState` and `Asset.error` reflect the new Application result.
+Every successful evaluator result is a complete declaration of `pluginState`, `currState`, `noDataError`, and `appError`; the runner replaces its previous values atomically rather than merging or defaulting omitted fields. If plugin execution throws, the runner discards the incomplete result and forces `currState = Undefined (0)`, `noDataError = false`, and `appError = true` while raising/updating its execution diagnostic. Every completed run persists scheduling metadata, but only a material result change updates `lastUpdateTimestamp`, emits `entity.updated`, and requests Asset recomputation.
 
 The diagnostic rule remains separate from these booleans: a thrown evaluation cannot authoritatively reconcile plugin-owned condition diagnostics, so those diagnostics remain active until the next successful evaluation. This does not change the failed run's common state values.
 
@@ -604,7 +616,7 @@ For example, an Application simply calls `report()` when `FAILED_CLOSED` or `NO_
 
 Reconcile only after a successful evaluation. If plugin execution throws, retain its previous condition diagnostics and raise/update a separate execution-error diagnostic owned by the base runner. One owner scope must never clear another scope's diagnostics. Provide an explicit `clearDiagnostic(code)` operation for genuinely asynchronous conditions, but use complete-set reconciliation for ordinary device parsing and application evaluation.
 
-An Application evaluation context includes its `sessionStartTs`, complete read-only `DatastreamState` for every mapped datafeed, an Application-scoped reporter, and an Asset-scoped reporter for its direct parent. The parent reporter gives an application a controlled way to raise a condition on behalf of its Asset. Its scope identity includes the Application ID, so an application reconciles only diagnostics that it owns even when several applications report conditions on the same Asset. For example, the Twin Temperature Failed Closed plugin owns its `FAILED_CLOSED` diagnostic on the Asset while retaining its process warning on the Application.
+An Application evaluation context includes its `sessionStartTs`, prior common result values, a cloned prior `pluginState`, complete read-only `DatastreamState` for every mapped datafeed, an Application-scoped reporter, and an Asset-scoped reporter for its direct parent. The parent reporter gives an application a controlled way to raise a condition on behalf of its Asset. Its scope identity includes the Application ID, so an application reconciles only diagnostics that it owns even when several applications report conditions on the same Asset. For example, the Twin Temperature Failed Closed plugin owns its `FAILED_CLOSED` diagnostic on the Asset while retaining its process warning on the Application.
 
 The Twin Temperature Failed Closed plugin waits until its own configured `windowSizeMs` has elapsed from `sessionStartTs` before reporting missing averages as `NO_DATA`, unless that condition was already active before a new session. A Datastream uses its configured grace period before initially reporting an empty buffer, but preserves a restored active `NO_DATA` condition during the new session's grace period. The Enless Twin Temperature plugin treats out-of-range readings as consecutive faulty values and raises `SENSOR_BROKEN` only when the configured `numFaultyValues` threshold is reached. Its default threshold is three; a valid reading resets the counter for that Datastream.
 
@@ -612,11 +624,14 @@ State calculation should still be transactional. An application result can have 
 
 ```ts
 interface ApplicationResult<TState> {
-  state: Partial<TState>;
+  pluginState: TState;
+  currState: ProcessState;
+  noDataError: boolean;
+  appError: boolean;
 }
 ```
 
-The runner commits returned state and reconciles the collected diagnostic set as one logical completion before publishing resulting events. If evaluation throws, it discards partial returned state and the incomplete diagnostic set, retains the prior plugin-owned conditions, and raises/updates the separate runner-owned execution diagnostic.
+The runner replaces its state from the complete result and reconciles the collected diagnostic set as one logical completion before publishing resulting events. A plugin that returns an active error boolean must report its matching active condition in the same successful evaluation; an omitted diagnostic is reconciled as cleared. If evaluation throws, the runner discards the incomplete result and diagnostic set, retains the prior plugin-owned conditions, and raises/updates the separate runner-owned execution diagnostic.
 
 ### Retention and sessions
 
@@ -766,8 +781,8 @@ The following points are now decided:
 - all configured Datastreams receive independent stale checks whether or not an Application references them;
 - Datastream changes coalesce Device recomputation, and Application changes coalesce Asset recomputation;
 - events contain a minimal envelope; Engine Message Receiver does not project state;
-- Engine State Snapshot preserves the request message and returns immutable state DTOs for one entity, a family, or the whole Engine;
-- missing Snapshot paths are omitted and listed in `missingPaths` by default; strict mode fails the request;
+- Engine State Snapshot consumes dynamic serializable selector arrays and returns immutable state DTOs for their union;
+- missing Snapshot paths and relationships are omitted without failing the request;
 - instances report typed events and diagnostics without knowing subscribers or constructing clear messages;
 - the Engine owns the single persistent diagnostic registry and complete-set reconciliation after successful evaluations;
 - Receiver immediately delivers lifecycle and diagnostic transitions and may coalesce noisy entity updates by source with bounded latency;

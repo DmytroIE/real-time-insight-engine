@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   Engine,
+  EntityKind,
   InMemoryStateStore,
   PluginRegistry,
   asApplicationId,
@@ -109,6 +110,24 @@ describe('LIFE-03 ready transition', () => {
       { type: 'engine.ready', data: { ready: true, sessionId: '1234' } },
     ]);
   });
+
+  it('reports a clean session in lifecycle and ready events', async () => {
+    const events: EngineEvent[] = [];
+
+    await Engine.create(emptyConfiguration(), {
+      clock: new FakeClock(1_234, 0),
+      timers: new FakeTimerScheduler(),
+      plugins: new PluginRegistry(),
+      stateStore: new InMemoryStateStore(),
+      cleanSession: true,
+      lifecycleListener: (event) => events.push(event),
+    });
+
+    expect(events.slice(-2)).toMatchObject([
+      { type: 'engine.lifecycle', data: { state: 'ready', cleanSession: true } },
+      { type: 'engine.ready', data: { cleanSession: true } },
+    ]);
+  });
 });
 
 describe('LIFE-04 lifecycle replay', () => {
@@ -126,7 +145,7 @@ describe('LIFE-04 lifecycle replay', () => {
     expect(events).toEqual([
       expect.objectContaining({
         type: 'engine.lifecycle',
-        data: { state: 'ready', ready: true, sessionId: engine.sessionId },
+        data: { state: 'ready', ready: true, sessionId: engine.sessionId, cleanSession: false },
       }),
     ]);
   });
@@ -230,9 +249,8 @@ describe('LIFE-06 health and readiness', () => {
     expect(engine.isReady).toBe(true);
     expect(engine.lifecycleState).toBe('ready');
     expect(
-      engine.snapshot({ target: { scope: 'all' } }).diagnostics.application[
-        'asset-1/application-1'
-      ],
+      engine.snapshot({ diagnostics: [{ type: EntityKind.Application, ids: '*' }] }).diagnostics
+        .application['asset-1/application-1'],
     ).toEqual([expect.objectContaining({ code: 'APPLICATION_EXECUTION_ERROR' })]);
   });
 });

@@ -47,7 +47,7 @@ export class Asset implements ParentRecomputationRequester {
   readonly #persistence: PersistenceMarker;
   #lastUpdateTimestamp: number;
   #currState: ProcessState;
-  #lastChildError = false;
+  #lastChildrenError = false;
 
   public constructor(
     options: AssetOptions,
@@ -100,12 +100,12 @@ export class Asset implements ParentRecomputationRequester {
     this.#recomputation.requestRecompute();
   }
 
-  public get chldError(): boolean {
+  public get childrenError(): boolean {
     return [...this.#applications.values()].some((application) => application.hasError);
   }
 
   public get hasError(): boolean {
-    return this.chldError;
+    return this.childrenError;
   }
 
   public close(): AssetState {
@@ -126,13 +126,13 @@ export class Asset implements ParentRecomputationRequester {
       const childState = application.state();
       currState = Math.max(currState, childState.currState) as ProcessState;
     }
-    const childError = this.chldError;
+    const childrenError = this.childrenError;
 
-    if (this.#currState === currState && this.#lastChildError === childError) {
+    if (this.#currState === currState && this.#lastChildrenError === childrenError) {
       return;
     }
     this.#currState = currState;
-    this.#lastChildError = childError;
+    this.#lastChildrenError = childrenError;
     this.#lastUpdateTimestamp = this.#clock.wallTimeMs();
     this.#persistence.markDirty();
     this.#eventSink.publish({

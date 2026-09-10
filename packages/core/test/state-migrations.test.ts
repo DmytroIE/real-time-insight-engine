@@ -117,6 +117,7 @@ const persistedSnapshot = (): PersistedEngineSnapshot => ({
     applications: {
       'asset-1/application-1': {
         lastRunTimestamp: 900,
+        lastUpdateTimestamp: 900,
         nextRunTimestamp: 1_100,
         currState: ProcessState.Ok,
         noDataError: false,
@@ -151,11 +152,7 @@ describe('STATE-06 deterministic migrations', () => {
 
     expect(
       engine.snapshot({
-        target: {
-          scope: 'entities',
-          entityType: EntityKind.Application,
-          entityId: 'asset-1/application-1',
-        },
+        entities: [{ type: EntityKind.Application, ids: 'asset-1/application-1' }],
       }).entities.application['asset-1/application-1']?.state,
     ).toMatchObject({ pluginState: { runs: 4 } });
   });
@@ -168,11 +165,7 @@ describe('STATE-06 deterministic migrations', () => {
 
     expect(
       engine.snapshot({
-        target: {
-          scope: 'entities',
-          entityType: EntityKind.Application,
-          entityId: 'asset-1/application-1',
-        },
+        entities: [{ type: EntityKind.Application, ids: 'asset-1/application-1' }],
       }).entities.application['asset-1/application-1']?.state,
     ).toMatchObject({ pluginState: { runs: 4, migrated: true } });
     await expect(
@@ -190,7 +183,15 @@ describe('STATE-07 corrupt-state recovery', () => {
     await store.save(engineSnapshotKey(asEngineId('engine-1')), malformed);
 
     const engine = await Engine.create(configuration(), dependencies(store));
-    const snapshot = engine.snapshot({ target: { scope: 'all' } });
+    const snapshot = engine.snapshot({
+      entities: [
+        { type: EntityKind.Device, ids: '*' },
+        { type: EntityKind.Datastream, ids: '*' },
+        { type: EntityKind.Application, ids: '*' },
+        { type: EntityKind.Asset, ids: '*' },
+      ],
+      diagnostics: [{ type: 'common', ids: '*' }],
+    });
 
     expect(Object.values(snapshot.entities).flatMap((group) => Object.values(group))).toHaveLength(
       4,
@@ -216,11 +217,7 @@ describe('STATE-07 corrupt-state recovery', () => {
 
     expect(
       engine.snapshot({
-        target: {
-          scope: 'entities',
-          entityType: EntityKind.Application,
-          entityId: 'asset-1/application-1',
-        },
+        entities: [{ type: EntityKind.Application, ids: 'asset-1/application-1' }],
       }).entities.application['asset-1/application-1']?.state,
     ).toMatchObject({ pluginState: { runs: 0 } });
   });

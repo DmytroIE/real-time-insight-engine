@@ -113,7 +113,12 @@ describe('APP-01 due and overlap policy', () => {
     let executions = 0;
     const { application, persistence } = setup(() => {
       executions += 1;
-      return { state: {} };
+      return {
+        pluginState: { value: 1, label: 'initial' },
+        currState: ProcessState.Warning,
+        noDataError: true,
+        appError: true,
+      };
     }, 1_100);
     const before = application.state();
 
@@ -125,7 +130,16 @@ describe('APP-01 due and overlap policy', () => {
   });
 
   it('derives a restored deadline from the active configured interval', async () => {
-    const { application } = setup(() => ({ state: {} }), 9_000, 900);
+    const { application } = setup(
+      () => ({
+        pluginState: { value: 1, label: 'initial' },
+        currState: ProcessState.Warning,
+        noDataError: true,
+        appError: true,
+      }),
+      9_000,
+      900,
+    );
 
     expect(application.nextApplicationRunTimestamp()).toBe(1_000);
   });
@@ -143,38 +157,52 @@ describe('APP-01 due and overlap policy', () => {
 
     const firstRun = application.runIfDue();
     await expect(application.runIfDue()).resolves.toBe('skipped-overlap');
-    resolveEvaluation?.({ state: { value: 2 } });
+    resolveEvaluation?.({
+      pluginState: { value: 2, label: 'initial' },
+      currState: ProcessState.Undefined,
+      noDataError: false,
+      appError: false,
+    });
     await expect(firstRun).resolves.toBe('completed');
     expect(executions).toBe(1);
   });
 });
 
-describe('APP-02 common reset and stale refresh', () => {
-  it('resets common state and refreshes Datastreams before plugin evaluation', async () => {
-    let observedState: unknown;
+describe('APP-02 complete context and stale refresh', () => {
+  it('provides common/plugin state and refreshes Datastreams before plugin evaluation', async () => {
+    let observedCommonState: unknown;
+    let observedPluginState: unknown;
     let staleChecksAtEvaluation = 0;
     let observedSessionStartTs = 0;
-    let observedPreviousNoDataError = false;
     let observedDatafeedState: unknown;
     const setupResult = setup((context) => {
-      observedState = context.state;
+      observedCommonState = {
+        currState: context.currState,
+        noDataError: context.noDataError,
+        appError: context.appError,
+      };
+      observedPluginState = context.pluginState;
       staleChecksAtEvaluation = setupResult.datastream.staleChecks;
       observedSessionStartTs = context.sessionStartTs;
-      observedPreviousNoDataError = context.previousNoDataError;
       observedDatafeedState = context.datafeeds.temperature?.state();
-      return { state: {} };
+      return {
+        pluginState: { value: 1, label: 'initial' },
+        currState: ProcessState.Warning,
+        noDataError: true,
+        appError: true,
+      };
     });
 
     await setupResult.application.runIfDue();
 
     expect(staleChecksAtEvaluation).toBe(1);
-    expect(observedState).toMatchObject({
-      currState: ProcessState.Undefined,
-      noDataError: false,
-      appError: false,
+    expect(observedCommonState).toEqual({
+      currState: ProcessState.Warning,
+      noDataError: true,
+      appError: true,
     });
+    expect(observedPluginState).toEqual({ value: 1, label: 'initial' });
     expect(observedSessionStartTs).toBe(1_000);
-    expect(observedPreviousNoDataError).toBe(true);
     expect(observedDatafeedState).toEqual({
       lastUpdateTimestamp: 0,
       nextUpdateTimestamp: 0,
@@ -188,14 +216,17 @@ describe('APP-02 common reset and stale refresh', () => {
 describe('APP-03 successful atomic commit', () => {
   it('commits common and plugin-specific result state together', async () => {
     const { application, events, parent, persistence } = setup(() => ({
-      state: { value: 7, label: 'complete' },
+      pluginState: { value: 7, label: 'complete' },
       currState: ProcessState.Ok,
+      noDataError: false,
+      appError: false,
     }));
 
     await expect(application.runIfDue()).resolves.toBe('completed');
 
     expect(application.state()).toEqual({
       lastRunTimestamp: 1_000,
+      lastUpdateTimestamp: 1_000,
       nextRunTimestamp: 1_100,
       currState: ProcessState.Ok,
       noDataError: false,
@@ -205,6 +236,28 @@ describe('APP-03 successful atomic commit', () => {
     expect(persistence.dirtyCount).toBe(1);
     expect(parent.requestCount).toBe(1);
     expect(events).toContainEqual(expect.objectContaining({ type: 'entity.updated' }));
+  });
+
+  it('updates run metadata without publishing when the calculated state is unchanged', async () => {
+    const { application, events, parent, persistence } = setup(() => ({
+      pluginState: { value: 1, label: 'initial' },
+      currState: ProcessState.Warning,
+      noDataError: true,
+      appError: true,
+    }));
+
+    await expect(application.runIfDue()).resolves.toBe('completed');
+
+    expect(application.state()).toMatchObject({
+      lastRunTimestamp: 1_000,
+      lastUpdateTimestamp: 0,
+      currState: ProcessState.Warning,
+      noDataError: true,
+      appError: true,
+    });
+    expect(persistence.dirtyCount).toBe(1);
+    expect(parent.requestCount).toBe(0);
+    expect(events).not.toContainEqual(expect.objectContaining({ type: 'entity.updated' }));
   });
 });
 
@@ -270,9 +323,10 @@ describe('APP-06 recovery after failure', () => {
         throw new Error('calculation failed');
       }
       return {
-        state: { value: 9, label: 'recovered' },
+        pluginState: { value: 9, label: 'recovered' },
         currState: ProcessState.Warning,
         noDataError: true,
+        appError: false,
       };
     });
     await application.runIfDue();
@@ -299,7 +353,12 @@ describe('Application parent diagnostic scope', () => {
         severity: 'warning',
         message: 'Reported by application',
       });
-      return { state: {} };
+      return {
+        pluginState: { value: 1, label: 'initial' },
+        currState: ProcessState.Warning,
+        noDataError: true,
+        appError: true,
+      };
     });
 
     await expect(application.runIfDue()).resolves.toBe('completed');

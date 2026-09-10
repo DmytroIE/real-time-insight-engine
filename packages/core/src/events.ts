@@ -27,18 +27,29 @@ interface EventEnvelope<Type extends string, Source extends EngineEventSource> {
 
 export type EntityUpdatedEvent = EventEnvelope<'entity.updated', EntityEventSource>;
 
+export type EngineLifecycleData =
+  | {
+      readonly state: 'ready';
+      readonly ready: true;
+      readonly sessionId: string;
+      readonly cleanSession: boolean;
+    }
+  | {
+      readonly state: Exclude<EngineLifecycleState, 'ready'>;
+      readonly ready: false;
+      readonly sessionId: string;
+      readonly cleanSession: boolean;
+    };
+
 export interface EngineLifecycleEvent extends EventEnvelope<'engine.lifecycle', EngineEventSource> {
-  readonly data: {
-    readonly state: EngineLifecycleState;
-    readonly ready: boolean;
-    readonly sessionId: string;
-  };
+  readonly data: EngineLifecycleData;
 }
 
 export interface EngineReadyEvent extends EventEnvelope<'engine.ready', EngineEventSource> {
   readonly data: {
     readonly ready: true;
     readonly sessionId: string;
+    readonly cleanSession: boolean;
   };
 }
 

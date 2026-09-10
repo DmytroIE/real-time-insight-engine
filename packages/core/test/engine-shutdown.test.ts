@@ -57,8 +57,10 @@ const configuration = (): EngineConfiguration => ({
 const createPlugins = (
   evaluate: () =>
     ApplicationResult<CalculationState> | Promise<ApplicationResult<CalculationState>> = () => ({
-    state: { runs: 1 },
+    pluginState: { runs: 1 },
     currState: ProcessState.Ok,
+    noDataError: false,
+    appError: false,
   }),
 ): PluginRegistry => {
   const device: DevicePlugin = {
@@ -187,7 +189,12 @@ describe('LIFE-08 coordinated drain and cleanup', () => {
     await Promise.resolve();
     expect(closed).toBe(false);
 
-    resolveEvaluation?.({ state: { runs: 1 }, currState: ProcessState.Ok });
+    resolveEvaluation?.({
+      pluginState: { runs: 1 },
+      currState: ProcessState.Ok,
+      noDataError: false,
+      appError: false,
+    });
     await expect(run).resolves.toBe('completed');
     await close;
 

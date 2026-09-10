@@ -53,7 +53,7 @@ npm run verify
 npm run pack:palette
 ```
 
-This creates `artifacts/node-red-contrib-sxs-industrial-0.2.0.tgz`. In Node-RED, open **Manage palette**, select **Install**, choose **Upload module tgz**, and upload that file. The archive includes the core and selected Device/Application plugins as bundled npm dependencies, so no other project archives or `settings.js` plugin-registry hook are required. Restart Node-RED and confirm that these four node types are available:
+This creates `artifacts/node-red-contrib-sxs-industrial-0.3.0.tgz`. In Node-RED, open **Manage palette**, select **Install**, choose **Upload module tgz**, and upload that file. The archive includes the core and selected Device/Application plugins as bundled npm dependencies, so no other project archives or `settings.js` plugin-registry hook are required. Restart Node-RED and confirm that these four node types are available:
 
 - `insight-engine`
 - `engine-input`
@@ -83,9 +83,11 @@ contextStorage: {
 
 Select `ieps` in the Engine node. Keep `flushInterval` between 60 and 300 seconds and restart Node-RED after changing it. A blank or unavailable Context store makes the node warn and use Node-RED's default context store instead; this allows startup but is commonly memory-only, so it does not provide restart recovery. An abrupt power loss can discard updates since the last flush; verify normal restart restoration, simulated power-loss behavior, and clean startup after deleting Engine state before production use.
 
-Each Engine config node uses its immutable Node-RED node ID to namespace persistent state; its editable Name is only a label. Deleting the config node removes that Engine's namespace after shutdown. Configuration JSON uses descriptive names as object keys and structured datafeed references, so names may contain spaces or separators without becoming runtime IDs. A normal redeploy removes persisted condition diagnostics for entities no longer present in the validated configuration.
+Each Engine config node uses its immutable Node-RED node ID to namespace persistent state; its editable Name is only a label. Deleting the config node removes that Engine's namespace after shutdown. Select **Clean session** before deployment to clear that namespace once before state restoration; the editor records a one-shot deployment request and automatically clears the checkbox. Configuration JSON uses descriptive names as object keys and structured datafeed references, so names may contain spaces or separators without becoming runtime IDs. A normal redeploy removes persisted condition diagnostics for entities no longer present in the validated configuration.
 
 The optional top-level `applicationDefaults` configuration supplies per-Application-type `runIntervalMs`, partial plugin `settings`, and partial retention settings by required datafeed name. `deviceDefaults` supplies partial plugin `settings` and partial `datastreams` settings by Device plugin type. Resolved plugin settings merge plugin manifest defaults, type defaults, then concrete Device/Application settings. For each Datastream, Device-type defaults merge first, application datafeed defaults override them by field (shared application defaults use maximum buffer length/age and minimum expected interval), and explicit Device Datastream values override last. Device-type Datastream defaults also provision declared streams without an Application mapping. `gracePeriodCoefficient` is an optional positive Datastream setting that delays an empty-buffer `NO_DATA` alarm until at least `expectedIntervalMs * gracePeriodCoefficient` has elapsed in the current Engine session; its default is `2`. A restored active `NO_DATA` condition remains active during that grace period. The Engine validates the complete resulting settings after merging; see `packages/deployment-ug65-example/settings.example.json` for a deployment example.
+
+Optional top-level `applicationScheduler` and `datastreamStaleScheduler` objects each accept positive safe-integer `batchSize` and `failureRetryDelayMs` values. Both default to a batch size of `3` and a failure retry delay of `1000` milliseconds.
 
 ### Engine input
 
@@ -100,17 +102,17 @@ msg.payload = {
 return msg;
 ```
 
-`timestamp` is the Unix epoch milliseconds at which the reading occurred. Invalid envelopes are rejected before Device parsing and emit an Engine-owned Common diagnostic; subscribe an Engine Message Receiver to `diagnostic.*` to observe them.
+`timestamp` is the Unix epoch millisecond safe integer at which the reading occurred. Invalid envelopes are rejected before Device parsing and emit an Engine-owned Common diagnostic; subscribe an Engine Message Receiver to `diagnostic.*` to observe them.
 
 ### Snapshots
 
-`engine-state-snapshot` adds a serializable response to `msg.snapshot`. Use `{ "target": { "scope": "all" } }` for all entity state and active diagnostics. The `entities` target optionally filters by `entityType` and then `entityId`; the `diagnostics` target uses the same filters and also accepts `entityType: "common"`. An `entityId` requires its `entityType`.
+`engine-state-snapshot` adds a serializable response to `msg.snapshot`. An upstream Function or Change node must supply `msg.snapshotRequest` with an `entities` and/or `diagnostics` selector array. Every selector requires a concrete `type` and `ids`, where `ids` is one runtime ID, a nonempty ID array, or `'*'`. The wildcard applies only to `ids`; diagnostic types also accept `common`.
 
-Entity results are indexed as `msg.snapshot.entities.<type>[runtimeId]`, such as `entities.datastream["Device%201/temp1"]`. Diagnostic results are indexed as `msg.snapshot.diagnostics.<lowercase-category>[sourceId]`, such as `diagnostics.datastream["Device%201/temp1"]`. `relations`, `statePaths`, and `strictPaths` apply to entity views and are invalid for a `diagnostics` request.
+Entity selectors may set `parent`, `children`, `datafeeds`, and `statePaths`. Missing related entities and state paths are omitted. Selectors are unioned and deduplicated; a full-state selection overrides projections for the same entity. Entity results are indexed as `msg.snapshot.entities.<type>[runtimeId]`, such as `entities.datastream["Device%201/temp1"]`. Diagnostic results are indexed as `msg.snapshot.diagnostics.<lowercase-category>[sourceId]`, such as `diagnostics.datastream["Device%201/temp1"]`. Every entity state includes `hasError`; Device and Asset states also include `childrenError`.
 
 ### Monitoring
 
-Monitor Engine lifecycle events, active diagnostics, process RSS/heap, event-loop delay, CPU, disk space, and context-store write behavior. Treat `failed` lifecycle state, repeated storage diagnostics, sustained event-loop delay, or memory growth under a representative flow as operational alerts. Receiver lifecycle and diagnostic events are never coalesced; use the replayed `engine.lifecycle` event with `msg.event.data.ready === true` to request a whole-Engine Snapshot and initialize consumers.
+Monitor Engine lifecycle events, active diagnostics, process RSS/heap, event-loop delay, CPU, disk space, and context-store write behavior. Treat `failed` lifecycle state, repeated storage diagnostics, sustained event-loop delay, or memory growth under a representative flow as operational alerts. Lifecycle and ready events include `data.cleanSession` so consumers can identify a requested clean deployment. Receiver lifecycle and diagnostic events are never coalesced; use the replayed `engine.lifecycle` event with `msg.event.data.ready === true` to request a whole-Engine Snapshot and initialize consumers.
 
 Run `npm run benchmark` after `npm run build` for a repeatable Engine/plugin baseline. Override the workload with `BENCH_ITERATIONS`. On Node 18.20.8 Linux x64 in a clean container, 5,000 ingests plus 500 Application runs measured:
 

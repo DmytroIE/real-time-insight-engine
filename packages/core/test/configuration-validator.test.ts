@@ -110,6 +110,24 @@ const expectConfigurationError = (action: () => unknown, path: string): void => 
 };
 
 describe('CFG-03 defaults and input isolation', () => {
+  it('accepts scheduler batch and retry settings', () => {
+    const raw = validConfiguration();
+    raw['applicationScheduler'] = { batchSize: 4, failureRetryDelayMs: 2_000 };
+    raw['datastreamStaleScheduler'] = { batchSize: 2, failureRetryDelayMs: 500 };
+
+    expect(build(raw)).toMatchObject({
+      applicationScheduler: { batchSize: 4, failureRetryDelayMs: 2_000 },
+      datastreamStaleScheduler: { batchSize: 2, failureRetryDelayMs: 500 },
+    });
+  });
+
+  it('rejects non-positive scheduler values', () => {
+    const raw = validConfiguration();
+    raw['applicationScheduler'] = { batchSize: 0 };
+
+    expectConfigurationError(() => build(raw), '$.applicationScheduler.batchSize');
+  });
+
   it('applies nested plugin defaults without mutating raw input', () => {
     const raw = validConfiguration();
     raw['applicationDefaults'] = {

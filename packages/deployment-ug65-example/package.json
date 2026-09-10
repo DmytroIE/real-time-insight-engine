@@ -1,6 +1,6 @@
 {
   "name": "@sxs/deployment-ug65-example",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Example UG65 deployment profile for the real-time insight engine",
   "license": "UNLICENSED",
   "engines": {
@@ -13,9 +13,9 @@
     "settings.example.json"
   ],
   "dependencies": {
-    "@sxs/app-twin-temp-failed-closed": "0.2.0",
-    "@sxs/device-enless-twin-temp": "0.2.0",
-    "@sxs/industrial-core": "0.2.0",
-    "node-red-contrib-sxs-industrial": "0.2.0"
+    "@sxs/app-twin-temp-failed-closed": "0.3.0",
+    "@sxs/device-enless-twin-temp": "0.3.0",
+    "@sxs/industrial-core": "0.3.0",
+    "node-red-contrib-sxs-industrial": "0.3.0"
   }
 }

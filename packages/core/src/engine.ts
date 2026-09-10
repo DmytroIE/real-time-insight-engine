@@ -51,13 +51,13 @@ import {
   preparePersistedSnapshot,
 } from './state-migrations';
 import {
-  SnapshotPathError,
   SnapshotRequestError,
   deepFreezeSnapshot,
   projectSnapshotState,
+  type DiagnosticSnapshotSelector,
+  type EntitySnapshotSelector,
   type EngineSnapshotResponse,
   type EntitySnapshot,
-  type MissingStatePath,
   type SnapshotDiagnosticGroups,
   type SnapshotDiagnosticCategory,
   type SnapshotEntityGroups,
@@ -87,6 +87,7 @@ export interface PersistentEngineDependencies extends EngineDependencies {
   readonly stateStore: StateStore;
   readonly snapshotMigrations?: readonly EngineSnapshotMigration[];
   readonly lifecycleListener?: EventListener;
+  readonly cleanSession?: boolean;
 }
 
 export interface EngineRegistryView {
@@ -144,6 +145,11 @@ const requireApplicationEvaluator = (
 
 const freezeIds = <Id extends string>(ids: Iterable<Id>): readonly Id[] => Object.freeze([...ids]);
 
+interface SnapshotEntitySelection {
+  readonly ref: EntityRef;
+  readonly statePaths?: readonly string[];
+}
+
 export class Engine implements PersistenceMarker {
   readonly #lifecycle: EngineLifecycleController;
   readonly #dependencies: EngineDependencies;
@@ -193,12 +199,14 @@ export class Engine implements PersistenceMarker {
       this.#dependencies.timers,
       () => [...this.#datastreams.values()],
       (result) => this.recordStaleTaskResult(result),
+      configuration.datastreamStaleScheduler,
     );
     this.#applicationScheduler = new ApplicationScheduler(
       this.#dependencies.clock,
       this.#dependencies.timers,
       () => [...this.#applications.values()],
       (result) => this.recordApplicationTaskResult(result),
+      configuration.applicationScheduler,
     );
     this.#clockJumpMonitor = new ClockJumpMonitor(
       this.#dependencies.clock,
@@ -232,6 +240,7 @@ export class Engine implements PersistenceMarker {
       configuration.engineId,
       dependencies.clock,
       dependencies.lifecycleListener,
+      dependencies.cleanSession,
     );
     let engine: Engine | undefined;
     try {
@@ -320,7 +329,11 @@ export class Engine implements PersistenceMarker {
     if (store === undefined) {
       throw new Error('Engine does not have a StateStore');
     }
-    const keys = await store.keys(engineStateKeyPrefix(this.id));
+    await Engine.deletePersistedState(this.id, store);
+  }
+
+  public static async deletePersistedState(engineId: EngineId, store: StateStore): Promise<void> {
+    const keys = await store.keys(engineStateKeyPrefix(engineId));
     await Promise.all(keys.map((key) => store.delete(key)));
   }
 
@@ -367,7 +380,7 @@ export class Engine implements PersistenceMarker {
     if (!isRecord(rawPayload)) {
       issues.push('INVALID_RAW_PAYLOAD');
     }
-    if (typeof timestamp !== 'number' || !Number.isFinite(timestamp)) {
+    if (typeof timestamp !== 'number' || !Number.isSafeInteger(timestamp)) {
       issues.push('INVALID_TIMESTAMP');
     }
     const commonScope = this.#diagnostics.createScope({
@@ -432,21 +445,10 @@ export class Engine implements PersistenceMarker {
     return close;
   }
 
-  public snapshot(
-    request: SnapshotRequest,
-    eventSource?: EntityEventSource,
-  ): EngineSnapshotResponse {
-    const missingPaths: MissingStatePath[] = [];
-    const entities = this.entityGroupsForSnapshot(request, eventSource, missingPaths);
-
-    if (request.strictPaths && missingPaths.length > 0) {
-      throw new SnapshotPathError(deepFreezeSnapshot(structuredClone(missingPaths)));
-    }
-
+  public snapshot(request: SnapshotRequest): EngineSnapshotResponse {
     return deepFreezeSnapshot({
-      entities,
+      entities: this.entityGroupsForSnapshot(request),
       diagnostics: this.diagnosticGroupsForSnapshot(request),
-      missingPaths,
     });
   }
 
@@ -665,90 +667,86 @@ export class Engine implements PersistenceMarker {
     this.#children.set(entityKey(parent), children);
   }
 
-  private resolveSnapshotRefs(
-    request: SnapshotRequest,
-    eventSource: EntityEventSource | undefined,
-  ): readonly EntityRef[] {
-    switch (request.target.scope) {
-      case 'all':
-        return this.allEntityRefs();
-      case 'diagnostics':
-        return [];
-      case 'entities': {
-        const { entityType, entityId } = request.target;
-        if (entityType === undefined) {
-          return this.allEntityRefs();
-        }
-        if (entityId === undefined) {
-          return this.allEntityRefs().filter((ref) => ref.kind === entityType);
-        }
-        return this.relatedSnapshotRefs(
-          { kind: entityType, id: entityId } as EntityRef,
-          request.relations,
-        );
-      }
-      case 'eventSource': {
-        if (eventSource === undefined || eventSource.engineId !== this.id) {
-          throw new SnapshotRequestError(
-            'Snapshot event source is missing or belongs to another Engine',
-          );
-        }
-        const selected = {
-          kind: eventSource.entityType,
-          id: eventSource.entityId,
-        } as EntityRef;
-        if (!this.hasEntity(selected)) {
-          throw new SnapshotRequestError(`Unknown entity: ${selected.kind}:${selected.id}`);
-        }
-        return this.relatedSnapshotRefs(selected, request.relations);
-      }
-    }
-  }
-
-  private relatedSnapshotRefs(
-    selected: EntityRef,
-    relations: SnapshotRequest['relations'],
-  ): readonly EntityRef[] {
-    if (!this.hasEntity(selected)) {
-      throw new SnapshotRequestError(`Unknown entity: ${selected.kind}:${selected.id}`);
-    }
-    switch (relations ?? 'self') {
-      case 'self':
-        return [selected];
-      case 'parent': {
-        const parent = this.#parents.get(entityKey(selected));
-        return parent === undefined ? [] : [parent];
-      }
-      case 'children':
-        return [...(this.#children.get(entityKey(selected)) ?? [])];
-      case 'family': {
-        const parent = this.#parents.get(entityKey(selected));
-        return [
-          selected,
-          ...(parent === undefined ? [] : [parent]),
-          ...(this.#children.get(entityKey(selected)) ?? []),
-        ];
-      }
-    }
-  }
-
-  private entityGroupsForSnapshot(
-    request: SnapshotRequest,
-    eventSource: EntityEventSource | undefined,
-    missingPaths: MissingStatePath[],
-  ): SnapshotEntityGroups {
+  private entityGroupsForSnapshot(request: SnapshotRequest): SnapshotEntityGroups {
     const entities: Record<EntityKind, Record<string, EntitySnapshot>> = {
       [EntityKind.Device]: {},
       [EntityKind.Datastream]: {},
       [EntityKind.Application]: {},
       [EntityKind.Asset]: {},
     };
-    for (const ref of this.resolveSnapshotRefs(request, eventSource)) {
-      const view = this.entitySnapshot(ref, request.statePaths);
-      missingPaths.push(...view.missingPaths.map((path) => ({ entity: { ...ref }, path })));
-      entities[ref.kind][ref.id] = view.snapshot;
+    for (const selection of this.entitySelectionsForSnapshot(request)) {
+      entities[selection.ref.kind][selection.ref.id] = this.entitySnapshot(
+        selection.ref,
+        selection.statePaths,
+      );
     }
     return entities;
+  }
+
+  private entitySelectionsForSnapshot(
+    request: SnapshotRequest,
+  ): readonly SnapshotEntitySelection[] {
+    const selections = new Map<string, SnapshotEntitySelection>();
+    for (const selector of request.entities ?? []) {
+      for (const ref of this.resolveEntitySelectorRefs(selector)) {
+        this.addEntitySnapshotSelection(selections, ref, selector.statePaths);
+        if (selector.parent) {
+          const parent = this.#parents.get(entityKey(ref));
+          if (parent !== undefined) {
+            this.addEntitySnapshotSelection(selections, parent, selector.statePaths);
+          }
+        }
+        if (selector.children) {
+          for (const child of this.#children.get(entityKey(ref)) ?? []) {
+            this.addEntitySnapshotSelection(selections, child, selector.statePaths);
+          }
+        }
+        if (selector.datafeeds) {
+          for (const datafeed of Object.values(this.#datafeeds.get(entityKey(ref)) ?? {})) {
+            this.addEntitySnapshotSelection(selections, datafeed, selector.statePaths);
+          }
+        }
+      }
+    }
+    return [...selections.values()];
+  }
+
+  private resolveEntitySelectorRefs(selector: EntitySnapshotSelector): readonly EntityRef[] {
+    if (selector.ids === '*') {
+      return this.allEntityRefs().filter((ref) => ref.kind === selector.type);
+    }
+    const ids = typeof selector.ids === 'string' ? [selector.ids] : selector.ids;
+    return ids.map((id) => {
+      const ref = { kind: selector.type, id } as EntityRef;
+      if (!this.hasEntity(ref)) {
+        throw new SnapshotRequestError(`Unknown entity: ${ref.kind}:${ref.id}`);
+      }
+      return ref;
+    });
+  }
+
+  private addEntitySnapshotSelection(
+    selections: Map<string, SnapshotEntitySelection>,
+    ref: EntityRef,
+    statePaths: readonly string[] | undefined,
+  ): void {
+    const key = entityKey(ref);
+    const existing = selections.get(key);
+    if (existing === undefined) {
+      selections.set(key, {
+        ref,
+        ...(statePaths === undefined ? {} : { statePaths: [...statePaths] }),
+      });
+      return;
+    }
+    if (existing.statePaths === undefined || statePaths === undefined) {
+      selections.set(key, { ref });
+      return;
+    }
+    selections.set(key, {
+      ref,
+      statePaths: [...new Set([...existing.statePaths, ...statePaths])],
+    });
   }
 
   private allEntityRefs(): readonly EntityRef[] {
@@ -778,25 +776,21 @@ export class Engine implements PersistenceMarker {
   private entitySnapshot(
     ref: EntityRef,
     statePaths: readonly string[] | undefined,
-  ): { readonly snapshot: EntitySnapshot; readonly missingPaths: readonly string[] } {
-    const projected = projectSnapshotState(this.entityState(ref), statePaths);
+  ): EntitySnapshot {
     const parent = this.#parents.get(entityKey(ref));
     const datafeeds = this.#datafeeds.get(entityKey(ref));
     const pluginType = this.#pluginTypes.get(entityKey(ref));
     return {
-      snapshot: {
-        entityType: ref.kind,
-        entityId: ref.id,
-        entityName: this.entityName(ref),
-        ...(pluginType === undefined ? {} : { pluginType }),
-        relationships: {
-          ...(parent === undefined ? {} : { parent: { ...parent } }),
-          children: (this.#children.get(entityKey(ref)) ?? []).map((child) => ({ ...child })),
-          ...(datafeeds === undefined ? {} : { datafeeds: structuredClone(datafeeds) }),
-        },
-        state: projected.state,
+      entityType: ref.kind,
+      entityId: ref.id,
+      entityName: this.entityName(ref),
+      ...(pluginType === undefined ? {} : { pluginType }),
+      relationships: {
+        ...(parent === undefined ? {} : { parent: { ...parent } }),
+        children: (this.#children.get(entityKey(ref)) ?? []).map((child) => ({ ...child })),
+        ...(datafeeds === undefined ? {} : { datafeeds: structuredClone(datafeeds) }),
       },
-      missingPaths: projected.missingPaths,
+      state: projectSnapshotState(this.entityState(ref), statePaths),
     };
   }
 
@@ -804,22 +798,64 @@ export class Engine implements PersistenceMarker {
     let state: object | undefined;
     switch (ref.kind) {
       case EntityKind.Device:
-        state = this.#devices.get(ref.id)?.state();
+        state = this.snapshotStateForDevice(ref.id);
         break;
       case EntityKind.Datastream:
-        state = this.#datastreams.get(ref.id)?.state();
+        state = this.snapshotStateForDatastream(ref.id);
         break;
       case EntityKind.Asset:
-        state = this.#assets.get(ref.id)?.state();
+        state = this.snapshotStateForAsset(ref.id);
         break;
       case EntityKind.Application:
-        state = this.#applications.get(ref.id)?.state();
+        state = this.snapshotStateForApplication(ref.id);
         break;
     }
     if (state === undefined) {
       throw new SnapshotRequestError(`Unknown entity: ${ref.kind}:${ref.id}`);
     }
     return state;
+  }
+
+  private snapshotStateForDevice(id: DeviceId): object | undefined {
+    const device = this.#devices.get(id);
+    return device === undefined
+      ? undefined
+      : {
+          ...device.state(),
+          childrenError: device.childrenError,
+          hasError: device.hasError,
+        };
+  }
+
+  private snapshotStateForDatastream(id: DatastreamId): object | undefined {
+    const datastream = this.#datastreams.get(id);
+    return datastream === undefined
+      ? undefined
+      : {
+          ...datastream.state(),
+          hasError: datastream.hasError,
+        };
+  }
+
+  private snapshotStateForAsset(id: AssetId): object | undefined {
+    const asset = this.#assets.get(id);
+    return asset === undefined
+      ? undefined
+      : {
+          ...asset.state(),
+          childrenError: asset.childrenError,
+          hasError: asset.hasError,
+        };
+  }
+
+  private snapshotStateForApplication(id: ApplicationId): object | undefined {
+    const application = this.#applications.get(id);
+    return application === undefined
+      ? undefined
+      : {
+          ...application.state(),
+          hasError: application.hasError,
+        };
   }
 
   private entityName(ref: EntityRef): string {
@@ -843,25 +879,49 @@ export class Engine implements PersistenceMarker {
       application: {},
       asset: {},
     };
-    if (request.target.scope !== 'all' && request.target.scope !== 'diagnostics') {
+    if (request.diagnostics === undefined) {
       return diagnostics;
     }
 
-    const selectedType =
-      request.target.scope === 'diagnostics' ? request.target.entityType : undefined;
-    const selectedSourceId =
-      request.target.scope === 'diagnostics' ? request.target.entityId : undefined;
-    for (const diagnostic of this.#diagnostics.records()) {
-      const category = diagnostic.category.toLowerCase() as SnapshotDiagnosticCategory;
-      if (selectedType !== undefined && category !== selectedType) {
-        continue;
+    const includedDiagnostics = new Set<string>();
+    for (const selector of request.diagnostics) {
+      const sourceIds = this.resolveDiagnosticSelectorIds(selector);
+      for (const diagnostic of this.#diagnostics.records()) {
+        const category = diagnostic.category.toLowerCase() as SnapshotDiagnosticCategory;
+        if (
+          category !== selector.type ||
+          (sourceIds !== undefined && !sourceIds.has(diagnostic.sourceId))
+        ) {
+          continue;
+        }
+        const key = `${diagnostic.category}:${diagnostic.sourceId}:${diagnostic.ownerScope}:${diagnostic.code}`;
+        if (includedDiagnostics.has(key)) {
+          continue;
+        }
+        includedDiagnostics.add(key);
+        (diagnostics[category][diagnostic.sourceId] ??= []).push(diagnostic);
       }
-      if (selectedSourceId !== undefined && diagnostic.sourceId !== selectedSourceId) {
-        continue;
-      }
-      (diagnostics[category][diagnostic.sourceId] ??= []).push(diagnostic);
     }
     return diagnostics;
+  }
+
+  private resolveDiagnosticSelectorIds(
+    selector: DiagnosticSnapshotSelector,
+  ): ReadonlySet<string> | undefined {
+    if (selector.ids === '*') {
+      return undefined;
+    }
+    const ids = typeof selector.ids === 'string' ? [selector.ids] : selector.ids;
+    for (const id of ids) {
+      if (selector.type === 'common') {
+        if (id !== this.id) {
+          throw new SnapshotRequestError(`Unknown Common diagnostic source: ${id}`);
+        }
+      } else if (!this.hasEntity({ kind: selector.type, id } as EntityRef)) {
+        throw new SnapshotRequestError(`Unknown entity: ${selector.type}:${id}`);
+      }
+    }
+    return new Set(ids);
   }
 
   private toPersistence(): PersistedEngineSnapshot {

@@ -42,7 +42,12 @@ const createPlugins = (): PluginRegistry => {
     defaultSettings: {},
     defaultState: {},
     create: () => ({
-      evaluate: () => ({ state: {}, currState: ProcessState.Ok }),
+      evaluate: () => ({
+        pluginState: {},
+        currState: ProcessState.Ok,
+        noDataError: false,
+        appError: false,
+      }),
     }),
   };
   const plugins = new PluginRegistry();
@@ -93,8 +98,7 @@ describe('SCHED-01 complete Datastream scheduling', () => {
     timers.runNext();
 
     const datastreams = engine.snapshot({
-      target: { scope: 'entities', entityType: EntityKind.Device, entityId: 'device-1' },
-      relations: 'children',
+      entities: [{ type: EntityKind.Device, ids: 'device-1', children: true }],
     }).entities.datastream;
     expect(Object.values(datastreams).map(({ state }) => state)).toEqual([
       expect.objectContaining({ noDataError: false }),
@@ -118,7 +122,12 @@ describe('SCHED-02 independent stale timing', () => {
     clock.advanceBy(150);
     timers.runNext();
 
-    const snapshot = engine.snapshot({ target: { scope: 'all' } });
+    const snapshot = engine.snapshot({
+      entities: [
+        { type: EntityKind.Datastream, ids: '*' },
+        { type: EntityKind.Application, ids: '*' },
+      ],
+    });
     const mapped = snapshot.entities.datastream['device-1/mapped'];
     const application = snapshot.entities.application['asset-1/application-1'];
     expect(mapped?.state).toMatchObject({ noDataError: false });

@@ -32,7 +32,7 @@ class ReplayEventSource {
     type: 'engine.lifecycle',
     timestamp: 1_000,
     source: { engineId: asEngineId('engine-1') },
-    data: { state: 'ready', ready: true, sessionId: 'session-1' },
+    data: { state: 'ready', ready: true, sessionId: 'session-1', cleanSession: false },
   };
 
   public get activeSubscriptions(): number {
@@ -242,7 +242,7 @@ describe('Engine Message Receiver', () => {
       topic: 'engine.lifecycle',
       event: expect.objectContaining({
         type: 'engine.lifecycle',
-        data: { state: 'ready', ready: true, sessionId: 'session-1' },
+        data: { state: 'ready', ready: true, sessionId: 'session-1', cleanSession: false },
       }),
     });
   });

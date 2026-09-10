@@ -23,12 +23,19 @@ export class EngineLifecycleController {
 
   #sessionId: string;
   #sessionStartTs: number;
+  #cleanSession: boolean;
 
-  public constructor(engineId: EngineId, clock: Clock, listener?: EventListener) {
+  public constructor(
+    engineId: EngineId,
+    clock: Clock,
+    listener?: EventListener,
+    cleanSession = false,
+  ) {
     this.#engineId = engineId;
     this.#clock = clock;
     this.#sessionStartTs = clock.wallTimeMs();
     this.#sessionId = String(this.#sessionStartTs);
+    this.#cleanSession = cleanSession;
     this.#current = this.lifecycleEvent('starting');
     if (listener !== undefined) {
       this.#eventBus.subscribe(['engine.lifecycle', 'engine.ready'], listener);
@@ -82,7 +89,7 @@ export class EngineLifecycleController {
         type: 'engine.ready',
         timestamp: this.#clock.wallTimeMs(),
         source: { engineId: this.#engineId },
-        data: { ready: true, sessionId: this.sessionId },
+        data: { ready: true, sessionId: this.sessionId, cleanSession: this.#cleanSession },
       });
     }
   }
@@ -90,6 +97,7 @@ export class EngineLifecycleController {
   public beginSession(): void {
     this.#sessionStartTs = this.#clock.wallTimeMs();
     this.#sessionId = String(this.#sessionStartTs);
+    this.#cleanSession = false;
   }
 
   public close(): void {
@@ -97,11 +105,25 @@ export class EngineLifecycleController {
   }
 
   private lifecycleEvent(state: EngineLifecycleState): EngineLifecycleEvent {
+    const data =
+      state === 'ready'
+        ? {
+            state,
+            ready: true as const,
+            sessionId: this.sessionId,
+            cleanSession: this.#cleanSession,
+          }
+        : {
+            state,
+            ready: false as const,
+            sessionId: this.sessionId,
+            cleanSession: this.#cleanSession,
+          };
     return {
       type: 'engine.lifecycle',
       timestamp: this.#clock.wallTimeMs(),
       source: { engineId: this.#engineId },
-      data: { state, ready: state === 'ready', sessionId: this.sessionId },
+      data,
     };
   }
 }

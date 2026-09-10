@@ -1,37 +1,26 @@
 import type { Diagnostic, DiagnosticCategory } from './diagnostics';
-import type { EntityEventSource } from './events';
 import type { PluginTypeId } from './identifiers';
 import type { EntityKind, EntityRef } from './model';
 
-export type SnapshotRelations = 'self' | 'parent' | 'children' | 'family';
+export type SnapshotIds = string | readonly string[] | '*';
 
-type SnapshotEntityTarget =
-  | { readonly scope: 'entities'; readonly entityType?: undefined; readonly entityId?: undefined }
-  | { readonly scope: 'entities'; readonly entityType: EntityKind; readonly entityId?: string };
+export interface EntitySnapshotSelector {
+  readonly type: EntityKind;
+  readonly ids: SnapshotIds;
+  readonly parent?: boolean;
+  readonly children?: boolean;
+  readonly datafeeds?: boolean;
+  readonly statePaths?: readonly string[];
+}
 
-type SnapshotDiagnosticsTarget =
-  | {
-      readonly scope: 'diagnostics';
-      readonly entityType?: undefined;
-      readonly entityId?: undefined;
-    }
-  | {
-      readonly scope: 'diagnostics';
-      readonly entityType: EntityKind | 'common';
-      readonly entityId?: string;
-    };
-
-export type SnapshotTarget =
-  | { readonly scope: 'eventSource' }
-  | SnapshotEntityTarget
-  | SnapshotDiagnosticsTarget
-  | { readonly scope: 'all' };
+export interface DiagnosticSnapshotSelector {
+  readonly type: EntityKind | 'common';
+  readonly ids: SnapshotIds;
+}
 
 export interface SnapshotRequest {
-  readonly target: SnapshotTarget;
-  readonly relations?: SnapshotRelations;
-  readonly statePaths?: readonly string[];
-  readonly strictPaths?: boolean;
+  readonly entities?: readonly EntitySnapshotSelector[];
+  readonly diagnostics?: readonly DiagnosticSnapshotSelector[];
 }
 
 export interface EntityRelationships {
@@ -49,11 +38,6 @@ export interface EntitySnapshot {
   readonly state: Readonly<object>;
 }
 
-export interface MissingStatePath {
-  readonly entity: EntityRef;
-  readonly path: string;
-}
-
 export type SnapshotEntityGroups = Readonly<
   Record<EntityKind, Readonly<Record<string, EntitySnapshot>>>
 >;
@@ -67,24 +51,12 @@ export type SnapshotDiagnosticGroups = Readonly<
 export interface EngineSnapshotResponse {
   readonly entities: SnapshotEntityGroups;
   readonly diagnostics: SnapshotDiagnosticGroups;
-  readonly missingPaths: readonly MissingStatePath[];
 }
 
 export class SnapshotRequestError extends Error {
   public constructor(message: string) {
     super(message);
     this.name = 'SnapshotRequestError';
-  }
-}
-
-export class SnapshotPathError extends SnapshotRequestError {
-  public constructor(public readonly missingPaths: readonly MissingStatePath[]) {
-    super(
-      `Snapshot state paths are missing: ${missingPaths
-        .map(({ entity, path }) => `${entity.kind}:${entity.id}:${path}`)
-        .join(', ')}`,
-    );
-    this.name = 'SnapshotPathError';
   }
 }
 
@@ -143,23 +115,21 @@ const writePath = (
 export const projectSnapshotState = (
   state: object,
   paths: readonly string[] | undefined,
-): { readonly state: object; readonly missingPaths: readonly string[] } => {
+): object => {
   if (paths === undefined) {
-    return { state: structuredClone(state), missingPaths: [] };
+    return structuredClone(state);
   }
 
   const projected: Record<string, unknown> = {};
-  const missingPaths: string[] = [];
   for (const path of paths) {
     const segments = splitPath(path);
     const result = readPath(state, segments);
     if (!result.found) {
-      missingPaths.push(path);
       continue;
     }
     writePath(projected, segments, result.value);
   }
-  return { state: projected, missingPaths };
+  return projected;
 };
 
 export const deepFreezeSnapshot = <Value>(value: Value): Value => {
@@ -171,5 +141,3 @@ export const deepFreezeSnapshot = <Value>(value: Value): Value => {
   }
   return Object.freeze(value);
 };
-
-export type SnapshotEventSource = EntityEventSource;

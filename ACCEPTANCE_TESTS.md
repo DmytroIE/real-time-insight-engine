@@ -7,6 +7,7 @@ This catalog defines the minimum observable behavior for `IMPLEMENTATION_PLAN.md
 - **CORE-01:** Process-state ordering is `Undefined=0`, `Ok=1`, `Warning=2`, `Error=3`; fake wall and monotonic clocks advance independently.
 - **EVT-01:** Engine bus preserves publication order and isolates listener failures.
 - **EVT-02:** Unsubscribe/Engine close removes listeners; two Engines never receive each other's events.
+- **EVT-03:** The lifecycle event data type permits `ready=true` only with `state="ready"` and `ready=false` only with a non-ready state.
 - **STATE-01:** In-memory `StateStore` implements load/save/delete/keys and never returns mutable stored references.
 
 ## Configuration and plugins
@@ -18,6 +19,7 @@ This catalog defines the minimum observable behavior for `IMPLEMENTATION_PLAN.md
 - **CFG-05:** Invalid intervals and buffer limits are rejected while nonempty descriptive entity names, including spaces and separators, are accepted.
 - **CFG-06:** Missing required datafeeds and unresolved structured `{ device, datastream }` mappings fail startup.
 - **CFG-07:** Unknown configuration fields follow the schema's explicit reject/allow policy.
+- **CFG-08:** Top-level Application and Datastream scheduler batch/retry settings accept only positive safe integers and reach the owning schedulers.
 
 ## Diagnostics
 
@@ -44,19 +46,20 @@ This catalog defines the minimum observable behavior for `IMPLEMENTATION_PLAN.md
 
 ## Device, Application, and Asset
 
-- **DEV-01:** Device defaults are `hwError=false`, `chldError=false`, `hasError=false`, and a default timestamp.
-- **DEV-02:** Device `chldError` includes every child Datastream `hasError`; `hasError` also includes own `hwError`.
-- **DEV-03:** Clearing the final source error clears Device `chldError` and `hasError` after recomputation.
+- **DEV-01:** Device defaults are `hwError=false`, `childrenError=false`, `hasError=false`, and a default timestamp.
+- **DEV-02:** Device `childrenError` includes every child Datastream `hasError`; `hasError` also includes own `hwError`.
+- **DEV-03:** Clearing the final source error clears Device `childrenError` and `hasError` after recomputation.
 - **DEV-04:** Invalid payload diagnostics reconcile on the next successful parse.
-- **ASSET-01:** Empty Asset state is `currState=Undefined`, `chldError=false`, and `hasError=false`.
+- **ASSET-01:** Empty Asset state is `currState=Undefined`, `childrenError=false`, and `hasError=false`.
 - **ASSET-02:** Asset `currState` is the maximum direct Application `currState`.
-- **ASSET-03:** Asset `chldError` and `hasError` are true iff a child Application `hasError` is true.
+- **ASSET-03:** Asset `childrenError` and `hasError` are true iff a child Application `hasError` is true.
 - **APP-01:** A not-yet-due Application does not execute or mutate run timestamps.
-- **APP-02:** Every run first resets common state to `0/false/false`, refreshes required Datastream stale state, and exposes full immutable datafeed state, `sessionStartTs`, and the prior no-data condition to the evaluator.
-- **APP-03:** Successful execution atomically commits common and plugin-specific state.
+- **APP-02:** Every run refreshes required Datastream stale state and exposes `sessionStartTs`, the prior common state, cloned prior plugin state, and immutable datafeed state to the evaluator.
+- **APP-03:** Successful execution atomically replaces complete common and plugin-specific result state.
 - **APP-04:** A thrown plugin leaves common state `currState=0`, `noDataError=false`, `appError=true`.
 - **APP-05:** A thrown plugin does not partially commit plugin state or clear plugin-owned diagnostics.
 - **APP-06:** A later successful run clears the runner exception diagnostic and replaces calculation state.
+- **APP-07:** Every completed run persists run metadata, but only a material result update changes `lastUpdateTimestamp`, emits `entity.updated`, and triggers Asset recomputation.
 - **AGG-01:** A burst of child changes creates one pending parent timer.
 - **AGG-02:** Parent recomputation reads the latest states and emits at most one update for that pass.
 - **AGG-03:** A child change during recomputation schedules exactly one trailing pass.
@@ -68,13 +71,13 @@ This catalog defines the minimum observable behavior for `IMPLEMENTATION_PLAN.md
 - **ENG-02:** Duplicate entity IDs or unresolved mappings fail atomically.
 - **ENG-03:** Two Engine instances have isolated registries, buses, state, and timers.
 - **ENG-04:** Public registries/views cannot mutate live Engine objects.
-- **SNAP-01:** Entity snapshot is a deep serializable copy with identity, type, relationships, and state.
-- **SNAP-02:** Parent, children, and family requests return only the documented related entities.
-- **SNAP-03:** Whole-Engine snapshot includes every entity and active diagnostic category, indexed by lowercase category/type and runtime/source ID.
-- **SNAP-04:** Projection returns requested dotted paths.
-- **SNAP-05:** Non-strict projection omits absent paths and reports entity/path pairs in `missingPaths`.
-- **SNAP-06:** Strict projection fails atomically when any path is absent.
-- **SNAP-07:** `entities` and `diagnostics` support optional type and ID filters; an ID requires a type, and diagnostics rejects entity-view options.
+- **SNAP-01:** Entity snapshot is a deep serializable copy with identity, type, relationships, state, and derived `hasError`; Device and Asset state also include derived `childrenError`.
+- **SNAP-02:** Entity selector booleans add direct parent, children, and Application datafeeds; unavailable relationships do not fail a request.
+- **SNAP-03:** Entity and diagnostic selector arrays can combine every selected category, indexed by lowercase category/type and runtime/source ID.
+- **SNAP-04:** Per-selector projection returns requested dotted paths for direct and expanded entity selections.
+- **SNAP-05:** Unavailable projected paths are omitted without failing or adding response metadata.
+- **SNAP-06:** Repeated selectors deduplicate entities, and a complete-state selection overrides projections for the same entity.
+- **SNAP-07:** Every selector requires a concrete type and IDs; IDs accept one ID, a nonempty array, or `'*'`, and diagnostic selectors reject entity-view options.
 
 ## Persistence and lifecycle
 
@@ -94,6 +97,7 @@ This catalog defines the minimum observable behavior for `IMPLEMENTATION_PLAN.md
 - **LIFE-07:** Shutdown first closes readiness and stops accepting work.
 - **LIFE-08:** Shutdown drains parent recomputation, saves state, and removes timers/listeners.
 - **LIFE-09:** Repeated shutdown is harmless.
+- **LIFE-10:** A requested clean deployment marks its startup lifecycle and ready events with `cleanSession=true`.
 
 ## Scheduling and clock changes
 
@@ -105,6 +109,7 @@ This catalog defines the minimum observable behavior for `IMPLEMENTATION_PLAN.md
 - **SCHED-06:** Missed historical intervals are not replayed after restart.
 - **SCHED-07:** One Application failure does not stop later Applications.
 - **SCHED-08:** The same Application never overlaps; the selected skip/coalesce policy is deterministic.
+- **SCHED-09:** Top-level scheduler batch/retry settings govern both independent scheduler domains.
 - **CLOCK-01:** Small wall-clock corrections do not trigger reset.
 - **CLOCK-02:** A jump beyond the configured horizon closes readiness and gates ingestion.
 - **CLOCK-03:** Cold reset deletes Engine-owned state through `StateStore` and rebuilds defaults/empty buffers.
@@ -138,7 +143,8 @@ This catalog defines the minimum observable behavior for `IMPLEMENTATION_PLAN.md
 - **NR-04:** `ieps` context adapter reads/writes the selected named store.
 - **NR-05:** A blank or unavailable configured context store falls back to Node-RED's default store, emits a node warning, shows a yellow ready status, and still initializes the Engine.
 - **NR-06:** Config-node close awaits Engine shutdown and calls the Node-RED close callback once; config-node removal then deletes only that Engine's persisted namespace.
-- **NR-07:** Engine Input validates the `msg.payload` `{ deviceName, rawPayload, timestamp }` contract and forwards a transport-neutral ingestion envelope.
+- **NR-06a:** A clean-session deployment request clears only this Engine namespace before restoration, is consumed once, and warns after successful startup.
+- **NR-07:** Engine Input validates the `msg.payload` `{ deviceName, rawPayload, timestamp }` contract, including a safe-integer timestamp, and forwards a transport-neutral ingestion envelope.
 - **NR-08:** Missing or invalid payload fields become envelope issues; the Engine rejects them before Device parsing and raises an Engine-owned Common diagnostic observable through Engine Message Receiver.
 - **NR-09:** Engine Input has zero outputs and never relays an input message; its status reports accepted or rejected ingestion.
 - **NR-10:** Input while not ready follows the configured queue/reject policy.
@@ -154,14 +160,14 @@ This catalog defines the minimum observable behavior for `IMPLEMENTATION_PLAN.md
 - **NR-20:** Trailing delay begins near 100 ms and continuous traffic flushes by 500 ms.
 - **NR-21:** Coalescing one source never suppresses another source or a noncoalescible event.
 - **NR-22:** Snapshot node preserves `_msgid`, event, and unrelated input properties.
-- **NR-23:** Configured request works without a preceding Function node.
-- **NR-24:** Valid dynamic `msg.snapshotRequest` overrides configured defaults.
-- **NR-25:** Entity/family/all targets attach results to `msg.snapshot`.
-- **NR-26:** Non-strict missing paths appear in `missingPaths`; strict mode calls `done(error)` with no output.
-- **NR-27:** Missing entity or malformed request calls `done(error)` without Engine mutation.
-- **NR-28:** `engine.ready` can trigger a whole-Engine initialization snapshot.
+- **NR-23:** Snapshot node requires a dynamic object-valued `msg.snapshotRequest` and has no configured fallback.
+- **NR-24:** Valid entity and diagnostic selector arrays, including relationship booleans and paths, reach the Engine unchanged.
+- **NR-25:** Combined entity and diagnostic selector results attach to `msg.snapshot`.
+- **NR-26:** Unavailable projected paths are passed to the Engine and do not fail node delivery.
+- **NR-27:** Missing request, malformed selectors, and unknown entities call `done(error)` without Engine mutation.
+- **NR-28:** `engine.ready` can trigger an initialization snapshot when the incoming message includes an explicit complete selector request.
 - **NR-29:** Every published Node-RED node provides built-in editor help, and the Insight Engine editor starts with full, partial, and default-driven configuration examples.
-- **NR-30:** Dynamic Snapshot requests support diagnostic filtering and reject an ID filter without a type/category.
+- **NR-30:** Dynamic Snapshot requests reject wildcard types, omitted/empty IDs, unsupported root fields, and entity options on diagnostic selectors.
 
 ## End-to-end and packaging
 

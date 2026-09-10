@@ -41,6 +41,11 @@ export interface AssetConfiguration {
   readonly applications: readonly ApplicationConfiguration[];
 }
 
+export interface SchedulerConfiguration {
+  readonly batchSize?: number;
+  readonly failureRetryDelayMs?: number;
+}
+
 export const applicationConfigurationEntries = (
   asset: AssetConfiguration,
 ): readonly [string, ApplicationConfiguration][] =>
@@ -49,6 +54,8 @@ export const applicationConfigurationEntries = (
 export interface EngineConfiguration {
   readonly engineId: EngineId;
   readonly clockJumpThresholdMs?: number;
+  readonly applicationScheduler?: SchedulerConfiguration;
+  readonly datastreamStaleScheduler?: SchedulerConfiguration;
   readonly applicationDefaults?: Readonly<Record<PluginTypeId, ApplicationConfigurationDefaults>>;
   readonly deviceDefaults?: Readonly<Record<PluginTypeId, DeviceConfigurationDefaults>>;
   readonly devices: Readonly<Record<string, DeviceConfiguration>>;

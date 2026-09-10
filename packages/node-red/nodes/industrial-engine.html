@@ -1,5 +1,13 @@
 <script type="text/javascript">
   const defaultConfiguration = {
+    applicationScheduler: {
+      batchSize: 3,
+      failureRetryDelayMs: 1000,
+    },
+    datastreamStaleScheduler: {
+      batchSize: 3,
+      failureRetryDelayMs: 1000,
+    },
     applicationDefaults: {
       'sxs.twin-temp-failed-closed': {
         runIntervalMs: 600000,
@@ -115,7 +123,18 @@
     defaults: {
       name: { value: '' },
       contextStore: { value: 'ieps' },
+      cleanSession: { value: false },
+      cleanSessionRequestId: { value: '' },
       configuration: { value: JSON.stringify(defaultConfiguration, null, 2), required: true },
+    },
+    oneditsave: function () {
+      if ($('#node-config-input-cleanSession').prop('checked')) {
+        this.cleanSessionRequestId = [
+          Date.now().toString(36),
+          Math.random().toString(36).slice(2),
+        ].join('-');
+      }
+      this.cleanSession = false;
     },
     label: function () {
       return this.name || 'Insight Engine';
@@ -131,6 +150,14 @@
   <div class="form-row">
     <label for="node-config-input-contextStore">Context store</label>
     <input type="text" id="node-config-input-contextStore" />
+  </div>
+  <div class="form-row">
+    <label for="node-config-input-cleanSession"><i class="fa fa-eraser"></i> Clean session</label>
+    <input
+      type="checkbox"
+      id="node-config-input-cleanSession"
+      style="display: inline-block; width: auto; vertical-align: top;"
+    />
   </div>
   <div class="form-row">
     <label for="node-config-input-configuration">Configuration</label>
@@ -170,6 +197,12 @@
     manifest defaults, type defaults, then the concrete Device or Application settings.
   </p>
   <p>
+    <code>applicationScheduler</code> and <code>datastreamStaleScheduler</code> are optional
+    top-level objects. Each accepts positive integer <code>batchSize</code> and
+    <code>failureRetryDelayMs</code> settings; both default to <code>3</code> and
+    <code>1000</code> milliseconds.
+  </p>
+  <p>
     Device-type Datastream settings provision declared streams. Application datafeed settings
     override them; when several Applications use one Datastream, their defaults use the largest
     buffer length, largest buffer age, smallest expected interval, and largest grace coefficient.
@@ -186,5 +219,9 @@
     <b>Context store</b> selects where Engine state is saved. Use a persistent
     <code>localfilesystem</code> store for restart recovery. An empty or unavailable store falls
     back to the Node-RED default store with a warning.
+  </p>
+  <p>
+    <b>Clean session</b> clears this Engine's saved state once at the next deploy, before the
+    Engine is restored. It then resets automatically, so later deploys keep their saved state.
   </p>
 </script>

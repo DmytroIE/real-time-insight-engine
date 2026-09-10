@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   Engine,
+  EntityKind,
   PluginRegistry,
   ProcessState,
   asApplicationId,
@@ -151,7 +152,14 @@ describe('ENG-01 Engine object graph', () => {
       assets: ['Steam%20Trap%201'],
       applications: ['Steam%20Trap%201/Twin%20Temp%20Failed%20Closed'],
     });
-    const entities = engine.snapshot({ target: { scope: 'all' } }).entities;
+    const entities = engine.snapshot({
+      entities: [
+        { type: EntityKind.Device, ids: '*' },
+        { type: EntityKind.Datastream, ids: '*' },
+        { type: EntityKind.Application, ids: '*' },
+        { type: EntityKind.Asset, ids: '*' },
+      ],
+    }).entities;
     expect(entities.device['Diag%20kit%20TX2%2019297%2F2']).toMatchObject({
       entityType: 'device',
       entityName: 'Diag kit TX2 19297/2',

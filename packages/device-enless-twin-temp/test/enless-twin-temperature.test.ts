@@ -91,11 +91,17 @@ const ingest = (
 
 const datastreamState = (engine: Engine, id: 'device-1/temp1' | 'device-1/temp2') =>
   engine.snapshot({
-    target: { scope: 'entities', entityType: EntityKind.Datastream, entityId: id },
+    entities: [{ type: EntityKind.Datastream, ids: id }],
   }).entities.datastream[id]?.state;
 
 const diagnosticsFor = (engine: Engine, type: 'device' | 'datastream') =>
-  Object.values(engine.snapshot({ target: { scope: 'all' } }).diagnostics[type]).flat();
+  Object.values(
+    engine.snapshot({
+      diagnostics: [
+        { type: type === 'device' ? EntityKind.Device : EntityKind.Datastream, ids: '*' },
+      ],
+    }).diagnostics[type],
+  ).flat();
 
 describe('PLUG-DEV-01 Enless manifest', () => {
   it('exposes a stable type, strict settings schema, defaults, and both Datastreams', () => {

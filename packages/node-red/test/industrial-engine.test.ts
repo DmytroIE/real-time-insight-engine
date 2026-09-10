@@ -2,7 +2,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import helper from 'node-red-node-test-helper';
 
 import {
+  EntityKind,
   PluginRegistry,
+  asEngineId,
   type Clock,
   type Engine,
   type TimerCallback,
@@ -12,6 +14,7 @@ import type { NodeAPI, NodeContextData } from 'node-red';
 
 import {
   createIndustrialEngineCloseHandler,
+  consumeCleanSessionRequest,
   registerIndustrialEngineNode,
   type IndustrialEngineNode,
   type IndustrialEngineNodeConfiguration,
@@ -89,6 +92,28 @@ const configuredStores = (includeIeps = true): void => {
 const engineNode = (): IndustrialEngineNode => helper.getNode('engine') as IndustrialEngineNode;
 
 describe('Engine config node', () => {
+  it('consumes each clean-session request once before Engine state restoration', async () => {
+    const values = new Map<string, unknown>([
+      ['engine/engine-1/snapshot', { previous: true }],
+      ['engine/other/snapshot', { preserved: true }],
+    ]);
+    const store = {
+      load: async <Value>(key: string) => values.get(key) as Value | undefined,
+      save: async <Value>(key: string, value: Value) => void values.set(key, value),
+      delete: async (key: string) => void values.delete(key),
+      keys: async (prefix: string) => [...values.keys()].filter((key) => key.startsWith(prefix)),
+    };
+
+    await expect(
+      consumeCleanSessionRequest(store, asEngineId('engine-1'), 'deployment-1'),
+    ).resolves.toBe(true);
+    expect(values.has('engine/engine-1/snapshot')).toBe(false);
+    expect(values.get('engine/other/snapshot')).toEqual({ preserved: true });
+    await expect(
+      consumeCleanSessionRequest(store, asEngineId('engine-1'), 'deployment-1'),
+    ).resolves.toBe(false);
+  });
+
   beforeAll(async () => {
     helper.init(require.resolve('node-red'));
     await new Promise<void>((resolve) => helper.startServer(resolve));
@@ -117,12 +142,14 @@ describe('Engine config node', () => {
       assets: [],
       applications: [],
     });
-    expect(engine.snapshot({ target: { scope: 'all' } }).entities).toEqual({
-      device: {},
-      datastream: {},
-      application: {},
-      asset: {},
-    });
+    expect(engine.snapshot({ entities: [{ type: EntityKind.Device, ids: '*' }] }).entities).toEqual(
+      {
+        device: {},
+        datastream: {},
+        application: {},
+        asset: {},
+      },
+    );
     expect(
       (node.status as typeof node.status & SinonMethod).calledWith({
         fill: 'green',

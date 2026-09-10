@@ -1,6 +1,6 @@
 {
   "name": "@sxs/industrial-core",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Framework-independent real-time insight engine",
   "license": "UNLICENSED",
   "engines": {

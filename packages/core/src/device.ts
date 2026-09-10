@@ -76,7 +76,7 @@ export class Device implements ParentRecomputationRequester {
   readonly #persistence: PersistenceMarker;
   #lastUpdateTimestamp: number;
   #hwError: boolean;
-  #lastChildError = false;
+  #lastChildrenError = false;
   #ownStateDirty = false;
 
   public constructor(
@@ -130,12 +130,12 @@ export class Device implements ParentRecomputationRequester {
     return this.#options.name ?? this.#options.id;
   }
 
-  public get chldError(): boolean {
+  public get childrenError(): boolean {
     return [...this.#datastreams.values()].some((datastream) => datastream.hasError);
   }
 
   public get hasError(): boolean {
-    return this.#hwError || this.chldError;
+    return this.#hwError || this.childrenError;
   }
 
   public async parsePayload(input: DevicePayloadInput): Promise<boolean> {
@@ -205,10 +205,10 @@ export class Device implements ParentRecomputationRequester {
   }
 
   private recomputeState(): void {
-    const childError = this.chldError;
-    const changed = this.#ownStateDirty || this.#lastChildError !== childError;
+    const childrenError = this.childrenError;
+    const changed = this.#ownStateDirty || this.#lastChildrenError !== childrenError;
     this.#ownStateDirty = false;
-    this.#lastChildError = childError;
+    this.#lastChildrenError = childrenError;
     if (!changed) {
       return;
     }

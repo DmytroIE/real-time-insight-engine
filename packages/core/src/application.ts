@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from 'node:util';
+
 import type { AssetApplicationState } from './asset';
 import type { DatastreamState, PersistenceMarker } from './datastream';
 import type { DatastreamSample, DatastreamValueRange } from './datastream-values';
@@ -20,17 +22,19 @@ export interface ApplicationDatastream {
 }
 
 export interface ApplicationResult<PluginState extends object> {
-  readonly state: Partial<PluginState>;
-  readonly currState?: ProcessState;
-  readonly noDataError?: boolean;
-  readonly appError?: boolean;
+  readonly pluginState: PluginState;
+  readonly currState: ProcessState;
+  readonly noDataError: boolean;
+  readonly appError: boolean;
 }
 
 export interface ApplicationEvaluationContext<PluginState extends object> {
   readonly timestamp: number;
   readonly sessionStartTs: number;
-  readonly previousNoDataError: boolean;
-  readonly state: Readonly<ApplicationState<PluginState>>;
+  readonly currState: ProcessState;
+  readonly noDataError: boolean;
+  readonly appError: boolean;
+  readonly pluginState: Readonly<PluginState>;
   readonly datafeeds: Readonly<Record<string, ApplicationDatastream>>;
   readonly diagnostics: DiagnosticReporter;
   readonly assetDiagnostics: DiagnosticReporter;
@@ -55,12 +59,14 @@ export interface ApplicationOptions {
 
 export interface ApplicationState<PluginState extends object> extends AssetApplicationState {
   readonly lastRunTimestamp: number;
+  readonly lastUpdateTimestamp: number;
   readonly nextRunTimestamp: number;
   readonly pluginState: Readonly<PluginState>;
 }
 
 export interface RestoredApplicationState<PluginState extends object> {
   readonly lastRunTimestamp?: number;
+  readonly lastUpdateTimestamp?: number;
   readonly nextRunTimestamp?: number;
   readonly currState?: ProcessState;
   readonly noDataError?: boolean;
@@ -83,6 +89,7 @@ export class Application<PluginState extends object = Record<string, unknown>> {
   readonly #persistence: PersistenceMarker;
   readonly #parent: ParentRecomputationRequester | undefined;
   #lastRunTimestamp: number;
+  #lastUpdateTimestamp: number;
   #nextRunTimestamp: number;
   #currState: ProcessState;
   #noDataError: boolean;
@@ -126,6 +133,7 @@ export class Application<PluginState extends object = Record<string, unknown>> {
     };
     this.#datafeeds = { ...datafeeds };
     this.#lastRunTimestamp = restored.lastRunTimestamp ?? 0;
+    this.#lastUpdateTimestamp = restored.lastUpdateTimestamp ?? 0;
     this.#nextRunTimestamp = this.#lastRunTimestamp + options.runIntervalMs;
     this.#currState = restored.currState ?? ProcessState.Undefined;
     this.#noDataError = restored.noDataError ?? false;
@@ -144,12 +152,9 @@ export class Application<PluginState extends object = Record<string, unknown>> {
     }
 
     this.#running = true;
-    const previousNoDataError = this.#noDataError;
+    const previousResult = this.resultState();
     this.#lastRunTimestamp = now;
     this.#nextRunTimestamp = now + this.#options.runIntervalMs;
-    this.#currState = ProcessState.Undefined;
-    this.#noDataError = false;
-    this.#appError = false;
     for (const datastream of Object.values(this.#datafeeds)) {
       datastream.evaluateStale();
     }
@@ -164,20 +169,22 @@ export class Application<PluginState extends object = Record<string, unknown>> {
       const result = await this.#evaluator.evaluate({
         timestamp: now,
         sessionStartTs: this.#options.sessionStartTimestamp,
-        previousNoDataError,
-        state: this.state(),
+        currState: this.#currState,
+        noDataError: this.#noDataError,
+        appError: this.#appError,
+        pluginState: clone(this.#pluginState),
         datafeeds: this.#datafeeds,
         diagnostics: calculationScope,
         assetDiagnostics: assetCalculationScope,
       });
-      this.#pluginState = { ...this.#pluginState, ...clone(result.state) };
-      this.#currState = result.currState ?? ProcessState.Undefined;
-      this.#noDataError = result.noDataError ?? false;
-      this.#appError = result.appError ?? false;
+      this.#pluginState = clone(result.pluginState);
+      this.#currState = result.currState;
+      this.#noDataError = result.noDataError;
+      this.#appError = result.appError;
       calculationScope.complete();
       assetCalculationScope.complete();
       this.#diagnostics.createScope(this.scopeIdentity('application-runner')).complete();
-      this.commit(now);
+      this.finishRun(now, !isDeepStrictEqual(previousResult, this.resultState()));
       return 'completed';
     } catch (error) {
       calculationScope.discard();
@@ -192,7 +199,7 @@ export class Application<PluginState extends object = Record<string, unknown>> {
         message: error instanceof Error ? error.message : 'Application execution failed',
       });
       runnerScope.complete();
-      this.commit(now);
+      this.finishRun(now, !isDeepStrictEqual(previousResult, this.resultState()));
       return 'failed';
     } finally {
       this.#running = false;
@@ -210,6 +217,7 @@ export class Application<PluginState extends object = Record<string, unknown>> {
   public state(): ApplicationState<PluginState> {
     return {
       lastRunTimestamp: this.#lastRunTimestamp,
+      lastUpdateTimestamp: this.#lastUpdateTimestamp,
       nextRunTimestamp: this.#nextRunTimestamp,
       currState: this.#currState,
       noDataError: this.#noDataError,
@@ -218,8 +226,24 @@ export class Application<PluginState extends object = Record<string, unknown>> {
     };
   }
 
-  private commit(timestamp: number): void {
+  private resultState(): Pick<
+    ApplicationState<PluginState>,
+    'currState' | 'noDataError' | 'appError' | 'pluginState'
+  > {
+    return {
+      currState: this.#currState,
+      noDataError: this.#noDataError,
+      appError: this.#appError,
+      pluginState: clone(this.#pluginState),
+    };
+  }
+
+  private finishRun(timestamp: number, stateChanged: boolean): void {
     this.#persistence.markDirty();
+    if (!stateChanged) {
+      return;
+    }
+    this.#lastUpdateTimestamp = timestamp;
     this.#eventSink.publish({
       type: 'entity.updated',
       timestamp,

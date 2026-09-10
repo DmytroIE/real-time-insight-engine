@@ -86,7 +86,7 @@ describe('DEV-01 Device defaults', () => {
     const { device } = setup();
 
     expect(device.state()).toEqual({ lastUpdateTimestamp: 0, hwError: false });
-    expect(device.chldError).toBe(false);
+    expect(device.childrenError).toBe(false);
     expect(device.hasError).toBe(false);
   });
 });
@@ -99,7 +99,7 @@ describe('DEV-02 Device error aggregation', () => {
     expect(device.datastream('temperature')).toBe(child);
 
     child.hwError = true;
-    expect(device.chldError).toBe(true);
+    expect(device.childrenError).toBe(true);
     expect(device.hasError).toBe(true);
     child.hwError = false;
     child.noDataError = true;
@@ -125,7 +125,7 @@ describe('DEV-03 aggregate error clearing', () => {
     const state = device.recompute();
 
     expect(state).toEqual({ lastUpdateTimestamp: 1_025, hwError: false });
-    expect(device.chldError).toBe(false);
+    expect(device.childrenError).toBe(false);
     expect(device.hasError).toBe(false);
     expect(persistence.dirtyCount).toBe(2);
     expect(events.filter((event) => event.type === 'entity.updated')).toHaveLength(2);
@@ -144,9 +144,9 @@ describe('AGG-01 and AGG-02 Device recomputation', () => {
     device.requestRecompute();
 
     expect(timers.pendingCount).toBe(1);
-    expect(device.chldError).toBe(true);
+    expect(device.childrenError).toBe(true);
     timers.runNext();
-    expect(device.chldError).toBe(true);
+    expect(device.childrenError).toBe(true);
     expect(device.hasError).toBe(true);
     expect(persistence.dirtyCount).toBe(1);
     expect(events.filter((event) => event.type === 'entity.updated')).toHaveLength(1);

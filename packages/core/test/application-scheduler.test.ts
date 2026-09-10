@@ -53,7 +53,12 @@ describe('SCHED-05 overdue Application execution', () => {
     let executions = 0;
     const application = createApplication(
       clock,
-      () => ({ state: { runs: ++executions }, currState: ProcessState.Ok }),
+      () => ({
+        pluginState: { runs: ++executions },
+        currState: ProcessState.Ok,
+        noDataError: false,
+        appError: false,
+      }),
       900,
     );
     const scheduler = new ApplicationScheduler(clock, timers, () => [application]);
@@ -76,7 +81,16 @@ describe('SCHED-06 missed interval policy', () => {
     const clock = new FakeClock(10_000, 0);
     const timers = new FakeTimerScheduler();
     let executions = 0;
-    const application = createApplication(clock, () => ({ state: { runs: ++executions } }), 1_000);
+    const application = createApplication(
+      clock,
+      () => ({
+        pluginState: { runs: ++executions },
+        currState: ProcessState.Undefined,
+        noDataError: false,
+        appError: false,
+      }),
+      1_000,
+    );
     const scheduler = new ApplicationScheduler(clock, timers, () => [application]);
 
     scheduler.start();
@@ -182,7 +196,12 @@ describe('SCHED-08 overlap and cleanup', () => {
     expect(outcomes).toEqual(['skipped-overlap']);
     expect(timers.nextDelayMs).toBe(1_000);
 
-    resolveEvaluation?.({ state: { runs: 1 } });
+    resolveEvaluation?.({
+      pluginState: { runs: 1 },
+      currState: ProcessState.Undefined,
+      noDataError: false,
+      appError: false,
+    });
     await expect(firstRun).resolves.toBe('completed');
     scheduler.stop();
     scheduler.stop();

@@ -67,6 +67,16 @@ describe('Engine Input normalization', () => {
     expect(normalizeEngineInput(inputMessage({ payload }))).toMatchObject({ issues });
   });
 
+  it('rejects a fractional timestamp', () => {
+    expect(
+      normalizeEngineInput(
+        inputMessage({
+          payload: { deviceName: 'device-1', rawPayload: {}, timestamp: 1_000.5 },
+        }),
+      ),
+    ).toMatchObject({ issues: ['INVALID_TIMESTAMP'] });
+  });
+
   it('NR-09 sends the normalized payload to the Engine without forwarding the message', async () => {
     const ingest = vi.fn<(input: EngineIngestInput) => Promise<boolean>>(() =>
       Promise.resolve(true),
@@ -141,7 +151,7 @@ describe('Engine Input readiness and completion', () => {
       type: 'engine.lifecycle',
       timestamp: 2_000,
       source: { engineId: asEngineId('engine-1') },
-      data: { state: 'ready', ready: true, sessionId: 'session-1' },
+      data: { state: 'ready', ready: true, sessionId: 'session-1', cleanSession: false },
     });
 
     await expect(queued).resolves.toBeUndefined();

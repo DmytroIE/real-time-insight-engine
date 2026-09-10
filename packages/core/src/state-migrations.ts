@@ -21,8 +21,10 @@ export class StateMigrationError extends Error {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const isNumber = (value: unknown): value is number =>
+const isFiniteNumber = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value);
+
+const isTimestamp = (value: unknown): value is number => Number.isSafeInteger(value);
 
 const isProcessState = (value: unknown): value is ProcessState =>
   Number.isInteger(value) &&
@@ -36,27 +38,31 @@ const recordValuesMatch = (
 
 const isDeviceState = (value: unknown): boolean =>
   isRecord(value) &&
-  isNumber(value['lastUpdateTimestamp']) &&
+  isTimestamp(value['lastUpdateTimestamp']) &&
   typeof value['hwError'] === 'boolean';
 
 const isDatastreamState = (value: unknown): boolean =>
   isRecord(value) &&
-  isNumber(value['lastUpdateTimestamp']) &&
-  isNumber(value['nextUpdateTimestamp']) &&
+  isTimestamp(value['lastUpdateTimestamp']) &&
+  isTimestamp(value['nextUpdateTimestamp']) &&
   typeof value['noDataError'] === 'boolean' &&
   typeof value['hwError'] === 'boolean' &&
   Array.isArray(value['samples']) &&
   value['samples'].every(
-    (sample) => isRecord(sample) && isNumber(sample['timestamp']) && isNumber(sample['value']),
+    (sample) =>
+      isRecord(sample) && isTimestamp(sample['timestamp']) && isFiniteNumber(sample['value']),
   );
 
 const isAssetState = (value: unknown): boolean =>
-  isRecord(value) && isNumber(value['lastUpdateTimestamp']) && isProcessState(value['currState']);
+  isRecord(value) &&
+  isTimestamp(value['lastUpdateTimestamp']) &&
+  isProcessState(value['currState']);
 
 const isApplicationState = (value: unknown): boolean =>
   isRecord(value) &&
-  isNumber(value['lastRunTimestamp']) &&
-  isNumber(value['nextRunTimestamp']) &&
+  isTimestamp(value['lastRunTimestamp']) &&
+  isTimestamp(value['nextRunTimestamp']) &&
+  (value['lastUpdateTimestamp'] === undefined || isTimestamp(value['lastUpdateTimestamp'])) &&
   isProcessState(value['currState']) &&
   typeof value['noDataError'] === 'boolean' &&
   typeof value['appError'] === 'boolean' &&
@@ -75,9 +81,9 @@ const isDiagnostic = (value: unknown): boolean =>
   diagnosticRetentions.includes(value['retention'] as DiagnosticRetention) &&
   isRecord(value['source']) &&
   typeof value['source']['engineId'] === 'string' &&
-  isNumber(value['firstRaisedTs']) &&
-  isNumber(value['lastUpdatedTs']) &&
-  isNumber(value['lastObservedTs']) &&
+  isTimestamp(value['firstRaisedTs']) &&
+  isTimestamp(value['lastUpdatedTs']) &&
+  isTimestamp(value['lastObservedTs']) &&
   Number.isInteger(value['occurrenceCount']);
 
 const validateSnapshot = (value: unknown): PersistedEngineSnapshot => {

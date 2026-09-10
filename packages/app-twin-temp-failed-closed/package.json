@@ -1,6 +1,6 @@
 {
   "name": "@sxs/app-twin-temp-failed-closed",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Twin-temperature failed-closed Application plugin",
   "license": "UNLICENSED",
   "engines": {
@@ -13,6 +13,6 @@
     "!dist/.tsbuildinfo"
   ],
   "dependencies": {
-    "@sxs/industrial-core": "0.2.0"
+    "@sxs/industrial-core": "0.3.0"
   }
 }

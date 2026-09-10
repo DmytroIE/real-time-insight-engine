@@ -107,18 +107,19 @@ const ingest = (
 
 const applicationState = (engine: Engine) =>
   engine.snapshot({
-    target: {
-      scope: 'entities',
-      entityType: EntityKind.Application,
-      entityId: applicationId,
-    },
+    entities: [{ type: EntityKind.Application, ids: applicationId }],
   }).entities.application[applicationId]?.state;
 
 const applicationDiagnostics = (engine: Engine) =>
-  Object.values(engine.snapshot({ target: { scope: 'all' } }).diagnostics.application).flat();
+  Object.values(
+    engine.snapshot({ diagnostics: [{ type: EntityKind.Application, ids: '*' }] }).diagnostics
+      .application,
+  ).flat();
 
 const assetDiagnostics = (engine: Engine) =>
-  Object.values(engine.snapshot({ target: { scope: 'all' } }).diagnostics.asset).flat();
+  Object.values(
+    engine.snapshot({ diagnostics: [{ type: EntityKind.Asset, ids: '*' }] }).diagnostics.asset,
+  ).flat();
 
 describe('PLUG-APP-01 manifest', () => {
   it('exposes stable feeds, settings schema, defaults, and state', () => {
@@ -194,15 +195,10 @@ describe('PLUG-APP-02 missing averages', () => {
     const result = evaluator.evaluate({
       timestamp: 1_050,
       sessionStartTs: 1_000,
-      previousNoDataError: true,
-      state: {
-        currState: ProcessState.Undefined,
-        noDataError: false,
-        appError: false,
-        lastRunTimestamp: 1_000,
-        nextRunTimestamp: 1_100,
-        pluginState: twinTemperatureFailedClosedDefaultState,
-      },
+      currState: ProcessState.Undefined,
+      noDataError: true,
+      appError: false,
+      pluginState: twinTemperatureFailedClosedDefaultState,
       datafeeds: { tempIn: emptyDatafeed, tempOut: emptyDatafeed },
       diagnostics: { report: ({ code }) => reports.push(code) },
       assetDiagnostics: { report: () => undefined },

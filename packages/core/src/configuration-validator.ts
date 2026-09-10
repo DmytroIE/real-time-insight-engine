@@ -13,6 +13,18 @@ import type {
 } from './configuration';
 
 const idPattern = '^[A-Za-z0-9][A-Za-z0-9._-]*$';
+const maximumSafeInteger = Number.MAX_SAFE_INTEGER;
+
+const schedulerProperties = {
+  batchSize: { type: 'integer', minimum: 1, maximum: maximumSafeInteger },
+  failureRetryDelayMs: { type: 'integer', minimum: 1, maximum: maximumSafeInteger },
+} as const;
+
+const schedulerSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: schedulerProperties,
+} as const;
 
 const datastreamProperties = {
   maxBufferLength: { type: 'integer', minimum: 1 },
@@ -38,6 +50,8 @@ const engineConfigurationSchema = {
   required: ['devices', 'assets'],
   properties: {
     clockJumpThresholdMs: { type: 'integer', minimum: 1 },
+    applicationScheduler: schedulerSchema,
+    datastreamStaleScheduler: schedulerSchema,
     applicationDefaults: {
       type: 'object',
       propertyNames: { pattern: idPattern },
@@ -167,6 +181,8 @@ interface RawAssetConfiguration {
 
 interface RawEngineConfiguration {
   clockJumpThresholdMs?: number;
+  applicationScheduler?: { batchSize?: number; failureRetryDelayMs?: number };
+  datastreamStaleScheduler?: { batchSize?: number; failureRetryDelayMs?: number };
   applicationDefaults?: Record<string, RawApplicationConfigurationDefaults>;
   deviceDefaults?: Record<string, RawDeviceConfigurationDefaults>;
   devices: Record<string, RawDeviceConfiguration>;
@@ -296,6 +312,12 @@ export class ConfigurationBuilder {
       ...(raw.clockJumpThresholdMs === undefined
         ? {}
         : { clockJumpThresholdMs: raw.clockJumpThresholdMs }),
+      ...(raw.applicationScheduler === undefined
+        ? {}
+        : { applicationScheduler: structuredClone(raw.applicationScheduler) }),
+      ...(raw.datastreamStaleScheduler === undefined
+        ? {}
+        : { datastreamStaleScheduler: structuredClone(raw.datastreamStaleScheduler) }),
       devices,
       assets,
     };

@@ -168,17 +168,15 @@ export {
   preparePersistedSnapshot,
 } from './state-migrations';
 export {
-  SnapshotPathError,
   SnapshotRequestError,
+  type DiagnosticSnapshotSelector,
   type EngineSnapshotResponse,
   type EntityRelationships,
   type EntitySnapshot,
-  type MissingStatePath,
   type SnapshotDiagnosticGroups,
-  type SnapshotEventSource,
-  type SnapshotRelations,
+  type SnapshotIds,
   type SnapshotRequest,
-  type SnapshotTarget,
+  type EntitySnapshotSelector,
 } from './snapshots';
 export type { Clock, TimerCallback, TimerScheduler } from './time';
 export {
