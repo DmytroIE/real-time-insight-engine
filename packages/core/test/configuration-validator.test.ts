@@ -153,6 +153,60 @@ describe('CFG-03 defaults and input isolation', () => {
     });
   });
 
+  it('retains free-form entity metadata without mutating input', () => {
+    const raw = validConfiguration();
+    const devices = raw['devices'] as Record<string, Record<string, unknown>>;
+    const assets = raw['assets'] as Record<string, Record<string, unknown>>;
+    const device = devices['device-1'];
+    const asset = assets['asset-1'];
+    const application = (asset?.['applications'] as Record<string, Record<string, unknown>>)[
+      'Application 1'
+    ];
+    if (device !== undefined) {
+      device['extra'] = { modbus: { registers: { childrenError: 205 } } };
+      const temperature = (device['datastreams'] as Record<string, Record<string, unknown>>)[
+        'temperature'
+      ];
+      if (temperature !== undefined) {
+        temperature['extra'] = { opcua: { node: 'ns=2;s=Temperature' } };
+      }
+    }
+    if (asset !== undefined) {
+      asset['extra'] = { cloud: { resource: 'trap-1' } };
+    }
+    if (application !== undefined) {
+      application['extra'] = { modbus: { registers: { currState: 27 } } };
+    }
+    const before = structuredClone(raw);
+
+    expect(build(raw)).toMatchObject({
+      devices: {
+        'device-1': {
+          extra: { modbus: { registers: { childrenError: 205 } } },
+          datastreams: { temperature: { extra: { opcua: { node: 'ns=2;s=Temperature' } } } },
+        },
+      },
+      assets: {
+        'asset-1': {
+          extra: { cloud: { resource: 'trap-1' } },
+          applications: [{ extra: { modbus: { registers: { currState: 27 } } } }],
+        },
+      },
+    });
+    expect(raw).toEqual(before);
+  });
+
+  it('rejects non-JSON metadata values from programmatic callers', () => {
+    const raw = validConfiguration();
+    const devices = raw['devices'] as Record<string, Record<string, unknown>>;
+    const device = devices['device-1'];
+    if (device !== undefined) {
+      device['extra'] = new Date();
+    }
+
+    expectConfigurationError(() => build(raw), '$.devices["device-1"].extra');
+  });
+
   it('provisions referenced Datastreams from aggregated application defaults', () => {
     const raw = {
       applicationDefaults: {

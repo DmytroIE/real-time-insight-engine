@@ -8,6 +8,7 @@ This catalog defines the minimum observable behavior for `IMPLEMENTATION_PLAN.md
 - **EVT-01:** Engine bus preserves publication order and isolates listener failures.
 - **EVT-02:** Unsubscribe/Engine close removes listeners; two Engines never receive each other's events.
 - **EVT-03:** The lifecycle event data type permits `ready=true` only with `state="ready"` and `ready=false` only with a non-ready state.
+- **EVT-04:** Every completed due Application run emits `application.executed` after any material `entity.updated`, with success, material-result, and committed timestamp data.
 - **STATE-01:** In-memory `StateStore` implements load/save/delete/keys and never returns mutable stored references.
 
 ## Configuration and plugins
@@ -20,6 +21,7 @@ This catalog defines the minimum observable behavior for `IMPLEMENTATION_PLAN.md
 - **CFG-06:** Missing required datafeeds and unresolved structured `{ device, datastream }` mappings fail startup.
 - **CFG-07:** Unknown configuration fields follow the schema's explicit reject/allow policy.
 - **CFG-08:** Top-level Application and Datastream scheduler batch/retry settings accept only positive safe integers and reach the owning schedulers.
+- **CFG-09:** Concrete Device, Datastream, Asset, and Application `extra` values retain free-form JSON metadata without affecting settings/default resolution.
 
 ## Diagnostics
 
@@ -53,13 +55,14 @@ This catalog defines the minimum observable behavior for `IMPLEMENTATION_PLAN.md
 - **ASSET-01:** Empty Asset state is `currState=Undefined`, `childrenError=false`, and `hasError=false`.
 - **ASSET-02:** Asset `currState` is the maximum direct Application `currState`.
 - **ASSET-03:** Asset `childrenError` and `hasError` are true iff a child Application `hasError` is true.
-- **APP-01:** A not-yet-due Application does not execute or mutate run timestamps.
+- **APP-01:** A fresh Application schedules its first run at session start plus its configured interval; a not-yet-due Application does not execute or mutate run timestamps.
 - **APP-02:** Every run refreshes required Datastream stale state and exposes `sessionStartTs`, the prior common state, cloned prior plugin state, and immutable datafeed state to the evaluator.
 - **APP-03:** Successful execution atomically replaces complete common and plugin-specific result state.
 - **APP-04:** A thrown plugin leaves common state `currState=0`, `noDataError=false`, `appError=true`.
 - **APP-05:** A thrown plugin does not partially commit plugin state or clear plugin-owned diagnostics.
 - **APP-06:** A later successful run clears the runner exception diagnostic and replaces calculation state.
 - **APP-07:** Every completed run persists run metadata, but only a material result update changes `lastUpdateTimestamp`, emits `entity.updated`, and triggers Asset recomputation.
+- **APP-08:** Every completed due run emits `application.executed`; its `success` and `resultChanged` fields distinguish execution outcome from material state change.
 - **AGG-01:** A burst of child changes creates one pending parent timer.
 - **AGG-02:** Parent recomputation reads the latest states and emits at most one update for that pass.
 - **AGG-03:** A child change during recomputation schedules exactly one trailing pass.
@@ -78,6 +81,7 @@ This catalog defines the minimum observable behavior for `IMPLEMENTATION_PLAN.md
 - **SNAP-05:** Unavailable projected paths are omitted without failing or adding response metadata.
 - **SNAP-06:** Repeated selectors deduplicate entities, and a complete-state selection overrides projections for the same entity.
 - **SNAP-07:** Every selector requires a concrete type and IDs; IDs accept one ID, a nonempty array, or `'*'`, and diagnostic selectors reject entity-view options.
+- **SNAP-08:** A selected entity includes an immutable copied `extra` JSON value when configured, outside of its state projection.
 
 ## Persistence and lifecycle
 
@@ -90,7 +94,7 @@ This catalog defines the minimum observable behavior for `IMPLEMENTATION_PLAN.md
 - **STATE-08:** A storage failure is surfaced and cannot silently diverge memory from persisted state.
 - **LIFE-01:** Startup publishes/replays `starting` with `ready=false` before any true state.
 - **LIFE-02:** Readiness becomes true only after validation, restoration/defaults, construction, aggregation, and scheduler startup.
-- **LIFE-03:** Transition to ready emits `engine.lifecycle` and `engine.ready` with the same session ID.
+- **LIFE-03:** Transition to ready emits `engine.lifecycle` and `engine.ready` with the same session ID and session start timestamp.
 - **LIFE-04:** A late Receiver immediately receives the current lifecycle state.
 - **LIFE-05:** Startup infrastructure failure publishes/replays `failed`, never `engine.ready`.
 - **LIFE-06:** Application health errors do not make Engine readiness false.
@@ -155,10 +159,10 @@ This catalog defines the minimum observable behavior for `IMPLEMENTATION_PLAN.md
 - **NR-15:** Multiple Receivers subscribe independently without sharing delivery buffers.
 - **NR-16:** Receiver replays current `engine.lifecycle` immediately after subscription.
 - **NR-17:** Receiver close removes listeners and pending timers.
-- **NR-18:** Lifecycle and raised/cleared/materially-updated diagnostics are delivered immediately and in order.
-- **NR-19:** Coalescing retains the latest eligible event per event type/source key.
-- **NR-20:** Trailing delay begins near 100 ms and continuous traffic flushes by 500 ms.
-- **NR-21:** Coalescing one source never suppresses another source or a noncoalescible event.
+- **NR-18:** A Receiver with batch mode disabled delivers every matching event immediately and in publication order.
+- **NR-19:** A batch-mode Receiver starts one fixed window on its first matching event and emits every matching event in arrival order at expiry.
+- **NR-20:** A batch-mode Receiver removes oldest events when its bounded FIFO is full and reports the resulting `droppedEventCount`.
+- **NR-21:** After delivery, a batch-mode Receiver starts its next fixed window only on a new matching event; close clears pending batches and timers.
 - **NR-22:** Snapshot node preserves `_msgid`, event, and unrelated input properties.
 - **NR-23:** Snapshot node requires a dynamic object-valued `msg.snapshotRequest` and has no configured fallback.
 - **NR-24:** Valid entity and diagnostic selector arrays, including relationship booleans and paths, reach the Engine unchanged.

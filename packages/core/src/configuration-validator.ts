@@ -10,6 +10,7 @@ import type {
   DeviceConfigurationDefaults,
   DeviceConfiguration,
   EngineConfiguration,
+  JsonValue,
 } from './configuration';
 
 const idPattern = '^[A-Za-z0-9][A-Za-z0-9._-]*$';
@@ -39,8 +40,13 @@ const datastreamDefaultsSchema = {
   properties: datastreamProperties,
 } as const;
 
-const datastreamSchema = {
+const datastreamConfigurationSchema = {
   ...datastreamDefaultsSchema,
+  properties: { ...datastreamProperties, extra: {} },
+} as const;
+
+const datastreamSchema = {
+  ...datastreamConfigurationSchema,
   required: ['maxBufferLength', 'maxBufferAgeMs', 'expectedIntervalMs'],
 } as const;
 
@@ -95,10 +101,11 @@ const engineConfigurationSchema = {
         properties: {
           type: { type: 'string', pattern: idPattern },
           settings: {},
+          extra: {},
           datastreams: {
             type: 'object',
             propertyNames: { minLength: 1 },
-            additionalProperties: datastreamDefaultsSchema,
+            additionalProperties: datastreamConfigurationSchema,
           },
         },
       },
@@ -111,6 +118,7 @@ const engineConfigurationSchema = {
         additionalProperties: false,
         required: ['applications'],
         properties: {
+          extra: {},
           applications: {
             type: 'object',
             propertyNames: { minLength: 1 },
@@ -122,6 +130,7 @@ const engineConfigurationSchema = {
                 type: { type: 'string', pattern: idPattern },
                 runIntervalMs: { type: 'integer', minimum: 1 },
                 settings: {},
+                extra: {},
                 datafeeds: {
                   type: 'object',
                   propertyNames: { pattern: idPattern },
@@ -149,12 +158,14 @@ interface RawDatastreamConfiguration {
   maxBufferAgeMs?: number;
   expectedIntervalMs?: number;
   gracePeriodCoefficient?: number;
+  extra?: JsonValue;
 }
 
 interface RawDeviceConfiguration {
   type: string;
   settings?: unknown;
   datastreams?: Record<string, RawDatastreamConfiguration>;
+  extra?: JsonValue;
 }
 
 interface RawApplicationConfiguration {
@@ -162,6 +173,7 @@ interface RawApplicationConfiguration {
   runIntervalMs?: number;
   settings?: unknown;
   datafeeds: Record<string, { device: string; datastream: string }>;
+  extra?: JsonValue;
 }
 
 interface RawApplicationConfigurationDefaults {
@@ -177,6 +189,7 @@ interface RawDeviceConfigurationDefaults {
 
 interface RawAssetConfiguration {
   applications: Record<string, RawApplicationConfiguration>;
+  extra?: JsonValue;
 }
 
 interface RawEngineConfiguration {
@@ -244,6 +257,29 @@ const schemaIssues = (errors: readonly ErrorObject[] | null | undefined): Config
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isJsonValue = (value: unknown): value is JsonValue => {
+  if (value === null || typeof value === 'boolean' || typeof value === 'number') {
+    return Number.isFinite(value) || typeof value !== 'number';
+  }
+  if (typeof value === 'string') {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.every(isJsonValue);
+  }
+  if (isRecord(value) && Object.getPrototypeOf(value) === Object.prototype) {
+    return Object.values(value).every(isJsonValue);
+  }
+  return false;
+};
+
+const jsonValue = (value: JsonValue, path: string): JsonValue => {
+  if (!isJsonValue(value)) {
+    fail(path, 'must be valid JSON data');
+  }
+  return structuredClone(value);
+};
 
 const mergeDefaults = (defaults: unknown, overrides: unknown): unknown => {
   if (overrides === undefined) {
@@ -360,7 +396,17 @@ export class ConfigurationBuilder {
             issue?.message ?? 'is invalid',
           );
         }
-        datastreams[datastreamName] = settings as DatastreamConfiguration;
+        datastreams[datastreamName] = {
+          ...settings,
+          ...(settings.extra === undefined
+            ? {}
+            : {
+                extra: jsonValue(
+                  settings.extra,
+                  `${appendPath(`${path}.datastreams`, datastreamName)}.extra`,
+                ),
+              }),
+        } as DatastreamConfiguration;
       }
 
       devices[deviceId] = {
@@ -372,6 +418,9 @@ export class ConfigurationBuilder {
           `${path}.settings`,
         ),
         datastreams,
+        ...(rawDevice.extra === undefined
+          ? {}
+          : { extra: jsonValue(rawDevice.extra, `${path}.extra`) }),
       };
     }
     return devices;
@@ -399,7 +448,12 @@ export class ConfigurationBuilder {
             referencedDatastreams,
           ),
       );
-      assets[assetId] = { applications };
+      assets[assetId] = {
+        applications,
+        ...(rawAsset.extra === undefined
+          ? {}
+          : { extra: jsonValue(rawAsset.extra, `${assetPath}.extra`) }),
+      };
     }
     return assets;
   }
@@ -443,6 +497,7 @@ export class ConfigurationBuilder {
       runIntervalMs,
       settings: this.buildSettings(plugin, defaults?.settings, raw.settings, `${path}.settings`),
       datafeeds: raw.datafeeds,
+      ...(raw.extra === undefined ? {} : { extra: jsonValue(raw.extra, `${path}.extra`) }),
     };
   }
 

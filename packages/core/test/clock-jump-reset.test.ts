@@ -189,6 +189,7 @@ describe('CLOCK-03 cold state rebuild', () => {
   it('deletes Engine-owned storage and rebuilds all entities from defaults', async () => {
     const store = new InMemoryStateStore();
     const { clock, engine } = await setup(store);
+    clock.advanceBy(100);
     await engine.runApplication(asApplicationId('asset-1/application-1'));
     const obsoleteKey = `${engineStateKeyPrefix(asEngineId('engine-1'))}obsolete`;
     await store.save(obsoleteKey, { stale: true });
@@ -205,7 +206,7 @@ describe('CLOCK-03 cold state rebuild', () => {
     const application = snapshot.entities.application['asset-1/application-1'];
     const datastream = snapshot.entities.datastream['device-1/temperature'];
     expect(application?.state).toMatchObject({
-      lastRunTimestamp: 0,
+      lastRunTimestamp: 1_201,
       currState: ProcessState.Undefined,
       pluginState: { runs: 0 },
     });

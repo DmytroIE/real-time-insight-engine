@@ -151,7 +151,7 @@ describe('PLUG-APP-02 missing averages', () => {
       windowSizeMs: 100,
     });
 
-    await expect(engine.runApplication(applicationId)).resolves.toBe('completed');
+    await expect(engine.runApplication(applicationId)).resolves.toBe('not-due');
     expect(applicationState(engine)).toMatchObject({
       currState: ProcessState.Undefined,
       noDataError: false,
@@ -211,8 +211,9 @@ describe('PLUG-APP-02 missing averages', () => {
 
 describe('PLUG-APP-03 invalid temperature direction', () => {
   it('sets appError and reports TEMP_OUT_ABOVE_IN', async () => {
-    const { engine } = createEngine();
+    const { clock, engine } = createEngine();
     await ingest(engine, 80, 81, 1_000);
+    clock.now = 1_100;
 
     await engine.runApplication(applicationId);
 
@@ -230,8 +231,9 @@ describe('PLUG-APP-03 invalid temperature direction', () => {
 
 describe('PLUG-APP-04 off state', () => {
   it('sets Off and leaves process state Undefined', async () => {
-    const { engine } = createEngine();
+    const { clock, engine } = createEngine();
     await ingest(engine, 79, 70, 1_000);
+    clock.now = 1_100;
 
     await engine.runApplication(applicationId);
 
@@ -249,7 +251,8 @@ describe('PLUG-APP-05 and PLUG-APP-06 on state', () => {
   it('reports Failed Closed, then returns Ok and reconciles the condition', async () => {
     const settings = { ...twinTemperatureFailedClosedDefaultSettings, windowSizeMs: 10 };
     const { clock, engine } = createEngine(settings);
-    await ingest(engine, 100, 60, 1_000);
+    clock.now = 1_100;
+    await ingest(engine, 100, 60, 1_100);
 
     await engine.runApplication(applicationId);
     expect(applicationState(engine)).toMatchObject({
@@ -261,8 +264,8 @@ describe('PLUG-APP-05 and PLUG-APP-06 on state', () => {
       { code: 'FAILED_CLOSED', severity: 'warning' },
     ]);
 
-    clock.now = 1_100;
-    await ingest(engine, 100, 90, 1_100);
+    clock.now = 1_200;
+    await ingest(engine, 100, 90, 1_200);
     await engine.runApplication(applicationId);
     expect(applicationState(engine)).toMatchObject({
       currState: ProcessState.Ok,
@@ -297,8 +300,9 @@ describe('PLUG-APP-07 inclusive average window', () => {
 
 describe('PLUG-APP-08 scoped reporting', () => {
   it('emits only active diagnostics without null-filled clear payloads', async () => {
-    const { engine } = createEngine();
+    const { clock, engine } = createEngine();
     await ingest(engine, 100, 60, 1_000);
+    clock.now = 1_100;
 
     await engine.runApplication(applicationId);
 

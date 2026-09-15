@@ -69,7 +69,7 @@ describe('NR-01 Node-RED package discovery', () => {
   });
 
   it('declares discoverable runtime/editor entry points and loads all four node types', async () => {
-    expect(manifest.version).toBe('0.3.0');
+    expect(manifest.version).toBe('0.4.0');
     expect(manifest['node-red']?.version).toBe('>=3.0.2');
     const nodes = manifest['node-red']?.nodes;
     expect(nodes).toEqual({

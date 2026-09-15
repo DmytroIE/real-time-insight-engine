@@ -1,10 +1,17 @@
 import type { EngineId, PluginTypeId } from './identifiers';
 
+export interface JsonObject {
+  readonly [key: string]: JsonValue;
+}
+
+export type JsonValue = null | boolean | number | string | readonly JsonValue[] | JsonObject;
+
 export interface DatastreamConfiguration {
   readonly maxBufferLength: number;
   readonly maxBufferAgeMs: number;
   readonly expectedIntervalMs: number;
   readonly gracePeriodCoefficient?: number;
+  readonly extra?: JsonValue;
 }
 
 export interface DatafeedReference {
@@ -27,6 +34,7 @@ export interface DeviceConfiguration {
   readonly type: PluginTypeId;
   readonly settings?: unknown;
   readonly datastreams?: Readonly<Record<string, DatastreamConfiguration>>;
+  readonly extra?: JsonValue;
 }
 
 export interface ApplicationConfiguration {
@@ -35,10 +43,12 @@ export interface ApplicationConfiguration {
   readonly runIntervalMs: number;
   readonly settings?: unknown;
   readonly datafeeds: Readonly<Record<string, DatafeedReference | string>>;
+  readonly extra?: JsonValue;
 }
 
 export interface AssetConfiguration {
   readonly applications: readonly ApplicationConfiguration[];
+  readonly extra?: JsonValue;
 }
 
 export interface SchedulerConfiguration {

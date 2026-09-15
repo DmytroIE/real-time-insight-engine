@@ -225,7 +225,11 @@ describe('Engine config node', () => {
   });
 
   it.each([
-    ['blank Context store', '   ', 'The Context store is empty'],
+    [
+      'blank Context store',
+      '   ',
+      'The "Context store" input field is empty; using the Node-RED default context store',
+    ],
     ['unavailable Context store', 'missing-store', 'Context store "missing-store" is unavailable'],
   ])('NR-05 uses the Node-RED default store for %s', async (_label, contextStore, warning) => {
     configuredStores(false);

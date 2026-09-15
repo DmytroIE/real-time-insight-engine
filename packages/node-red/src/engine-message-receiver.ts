@@ -7,6 +7,9 @@ import { ENGINE_MESSAGE_RECEIVER_NODE_TYPE } from './node-types';
 export interface EngineMessageReceiverNodeConfiguration extends NodeDef {
   readonly engine: string;
   readonly eventPatterns?: string | readonly string[];
+  readonly batchMode?: boolean;
+  readonly batchWindowMs?: number;
+  readonly batchMaxEvents?: number;
 }
 
 export interface EngineMessageReceiver {
@@ -19,34 +22,44 @@ export interface ReceiverTimerScheduler {
 }
 
 export interface EngineMessageReceiverOptions {
-  readonly now?: () => number;
   readonly timers?: ReceiverTimerScheduler;
-  readonly trailingDelayMs?: number;
-  readonly maximumDelayMs?: number;
+  readonly batchMode?: boolean;
+  readonly batchWindowMs?: number;
+  readonly batchMaxEvents?: number;
 }
 
-export const DEFAULT_RECEIVER_TRAILING_DELAY_MS = 100;
-export const DEFAULT_RECEIVER_MAXIMUM_DELAY_MS = 500;
+export const MIN_RECEIVER_BATCH_WINDOW_MS = 1_000;
+export const MAX_RECEIVER_BATCH_WINDOW_MS = 10_000;
+export const DEFAULT_RECEIVER_BATCH_WINDOW_MS = 1_000;
+export const MIN_RECEIVER_BATCH_MAX_EVENTS = 2;
+export const MAX_RECEIVER_BATCH_MAX_EVENTS = 100;
+export const DEFAULT_RECEIVER_BATCH_MAX_EVENTS = 100;
 
 const systemTimers: ReceiverTimerScheduler = {
   setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
   clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
 
-interface PendingDelivery {
-  event: EngineEvent;
-  readonly firstObservedAt: number;
+interface PendingBatch {
+  readonly events: EngineEvent[];
+  droppedEventCount: number;
   timer: unknown;
 }
 
-const isCoalescible = (event: EngineEvent): boolean => event.type === 'entity.updated';
-
-const deliveryKey = (event: EngineEvent): string => {
-  if (!('entityType' in event.source)) {
-    throw new Error(`Event ${event.type} does not have an entity source`);
+const boundedInteger = (
+  value: number | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number => {
+  const resolved = value ?? fallback;
+  if (!Number.isSafeInteger(resolved) || resolved < min || resolved > max) {
+    throw new Error(`Expected an integer between ${min} and ${max}`);
   }
-  return JSON.stringify([event.type, event.source.entityType, event.source.entityId]);
+  return resolved;
 };
+
+const configuredInteger = (value: number): number => Number(value);
 
 export const parseEventPatterns = (
   value: string | readonly string[] | undefined,
@@ -81,60 +94,85 @@ export const toReceiverMessage = (event: EngineEvent): NodeMessage => {
   };
 };
 
+const toBatchReceiverMessage = (batch: PendingBatch): NodeMessage => {
+  const first = batch.events[0];
+  const last = batch.events.at(-1);
+  if (first === undefined || last === undefined) {
+    throw new Error('Cannot send an empty Engine event batch');
+  }
+  return {
+    topic: 'engine.event-batch',
+    event: {
+      type: 'engine.event-batch',
+      timestamp: last.timestamp,
+      source: { engineId: first.source.engineId },
+      data: {
+        droppedEventCount: batch.droppedEventCount,
+        events: batch.events.map((event) => toReceiverMessage(event).event),
+      },
+    },
+  };
+};
+
 export const createEngineMessageReceiver = (
   node: Pick<Node, 'send'>,
   engine: Pick<Engine, 'subscribe'>,
   patterns: EventPattern | readonly EventPattern[],
   options: EngineMessageReceiverOptions = {},
 ): EngineMessageReceiver => {
-  const now = options.now ?? (() => performance.now());
   const timers = options.timers ?? systemTimers;
-  const trailingDelayMs = options.trailingDelayMs ?? DEFAULT_RECEIVER_TRAILING_DELAY_MS;
-  const maximumDelayMs = options.maximumDelayMs ?? DEFAULT_RECEIVER_MAXIMUM_DELAY_MS;
-  const pending = new Map<string, PendingDelivery>();
+  const batchMode = options.batchMode ?? false;
+  const batchWindowMs = boundedInteger(
+    options.batchWindowMs,
+    DEFAULT_RECEIVER_BATCH_WINDOW_MS,
+    MIN_RECEIVER_BATCH_WINDOW_MS,
+    MAX_RECEIVER_BATCH_WINDOW_MS,
+  );
+  const batchMaxEvents = boundedInteger(
+    options.batchMaxEvents,
+    DEFAULT_RECEIVER_BATCH_MAX_EVENTS,
+    MIN_RECEIVER_BATCH_MAX_EVENTS,
+    MAX_RECEIVER_BATCH_MAX_EVENTS,
+  );
+  let pending: PendingBatch | undefined;
   const send = (event: EngineEvent): void => {
     node.send(toReceiverMessage(event));
   };
-  const flush = (key: string): void => {
-    const delivery = pending.get(key);
-    if (delivery === undefined) {
+  const flush = (): void => {
+    const batch = pending;
+    pending = undefined;
+    if (batch === undefined) {
       return;
     }
-    pending.delete(key);
-    send(delivery.event);
+    node.send(toBatchReceiverMessage(batch));
   };
   let unsubscribe: Unsubscribe | undefined = engine.subscribe(patterns, (event) => {
-    if (!isCoalescible(event)) {
+    if (!batchMode) {
       send(event);
       return;
     }
 
-    const key = deliveryKey(event);
-    const observedAt = now();
-    const current = pending.get(key);
-    if (current !== undefined) {
-      timers.clearTimeout(current.timer);
+    if (pending === undefined) {
+      pending = {
+        events: [],
+        droppedEventCount: 0,
+        timer: timers.setTimeout(flush, batchWindowMs),
+      };
     }
-    const delivery: PendingDelivery = {
-      event,
-      firstObservedAt: current?.firstObservedAt ?? observedAt,
-      timer: undefined,
-    };
-    pending.set(key, delivery);
-    const maximumRemaining = delivery.firstObservedAt + maximumDelayMs - observedAt;
-    delivery.timer = timers.setTimeout(
-      () => flush(key),
-      Math.max(0, Math.min(trailingDelayMs, maximumRemaining)),
-    );
+    pending.events.push(event);
+    if (pending.events.length > batchMaxEvents) {
+      pending.events.shift();
+      pending.droppedEventCount += 1;
+    }
   });
   return {
     close: () => {
       unsubscribe?.();
       unsubscribe = undefined;
-      for (const delivery of pending.values()) {
-        timers.clearTimeout(delivery.timer);
+      if (pending !== undefined) {
+        timers.clearTimeout(pending.timer);
+        pending = undefined;
       }
-      pending.clear();
     },
   };
 };
@@ -163,6 +201,15 @@ export const registerEngineMessageReceiverNode = (RED: NodeAPI): void => {
             this,
             engine,
             parseEventPatterns(config.eventPatterns),
+            {
+              batchMode: config.batchMode === true,
+              ...(config.batchWindowMs === undefined
+                ? {}
+                : { batchWindowMs: configuredInteger(config.batchWindowMs) }),
+              ...(config.batchMaxEvents === undefined
+                ? {}
+                : { batchMaxEvents: configuredInteger(config.batchMaxEvents) }),
+            },
           );
           this.status({ fill: 'green', shape: 'dot', text: 'connected' });
         })

@@ -98,9 +98,10 @@ const createPersistentEngine = (
   store: InMemoryStateStore,
   applicationFails = false,
   engineConfiguration = configuration(),
+  clock = new FakeClock(1_000, 0),
 ): Promise<Engine> =>
   Engine.create(engineConfiguration, {
-    clock: new FakeClock(1_000, 0),
+    clock,
     timers: new FakeTimerScheduler(),
     plugins: createPlugins(applicationFails),
     stateStore: store,
@@ -109,7 +110,9 @@ const createPersistentEngine = (
 describe('STATE-02 restart restoration', () => {
   it('restores versioned entity state and condition diagnostics', async () => {
     const store = new InMemoryStateStore();
-    const first = await createPersistentEngine(store, true);
+    const clock = new FakeClock(1_000, 0);
+    const first = await createPersistentEngine(store, true, configuration(), clock);
+    clock.advanceBy(100);
     await first.runApplication(asApplicationId('asset-1/application-1'));
     await first.save();
 
@@ -121,8 +124,8 @@ describe('STATE-02 restart restoration', () => {
     const application = snapshot.entities.application['asset-1/application-1'];
 
     expect(application?.state).toMatchObject({
-      lastRunTimestamp: 1_000,
-      nextRunTimestamp: 1_100,
+      lastRunTimestamp: 1_100,
+      nextRunTimestamp: 1_200,
       appError: true,
       pluginState: { runs: 0 },
     });

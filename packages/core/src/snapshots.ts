@@ -1,4 +1,5 @@
 import type { Diagnostic, DiagnosticCategory } from './diagnostics';
+import type { JsonValue } from './configuration';
 import type { PluginTypeId } from './identifiers';
 import type { EntityKind, EntityRef } from './model';
 
@@ -34,6 +35,7 @@ export interface EntitySnapshot {
   readonly entityId: string;
   readonly entityName?: string;
   readonly pluginType?: PluginTypeId;
+  readonly extra?: JsonValue;
   readonly relationships: EntityRelationships;
   readonly state: Readonly<object>;
 }

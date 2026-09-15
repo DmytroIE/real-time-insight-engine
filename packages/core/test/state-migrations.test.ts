@@ -91,8 +91,12 @@ const createPlugins = (version = 1, includeMigrations = true): PluginRegistry =>
   return plugins;
 };
 
-const dependencies = (store: StateStore, plugins = createPlugins()) => ({
-  clock: new FakeClock(1_000, 0),
+const dependencies = (
+  store: StateStore,
+  plugins = createPlugins(),
+  clock = new FakeClock(1_000, 0),
+) => ({
+  clock,
   timers: new FakeTimerScheduler(),
   plugins,
   stateStore: store,
@@ -258,9 +262,11 @@ describe('STATE-08 storage failures', () => {
 
   it('surfaces save failures and keeps changed memory dirty', async () => {
     const store = new FailingStateStore();
-    const engine = await Engine.create(configuration(), dependencies(store));
+    const clock = new FakeClock(1_000, 0);
+    const engine = await Engine.create(configuration(), dependencies(store, undefined, clock));
     const key = engineSnapshotKey(asEngineId('engine-1'));
     const before = await store.load(key);
+    clock.advanceBy(100);
     await engine.runApplication(asApplicationId('asset-1/application-1'));
     store.failSaves = true;
 

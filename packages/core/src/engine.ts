@@ -15,6 +15,7 @@ import {
   applicationConfigurationEntries,
   type DatafeedReference,
   type EngineConfiguration,
+  type JsonValue,
 } from './configuration';
 import { Datastream, type PersistenceMarker, type RestoredDatastreamState } from './datastream';
 import {
@@ -166,6 +167,7 @@ export class Engine implements PersistenceMarker {
   readonly #datafeeds = new Map<string, Readonly<Record<string, EntityRef>>>();
   readonly #pluginTypes = new Map<string, PluginTypeId>();
   readonly #pluginVersions = new Map<string, number>();
+  readonly #extras = new Map<string, JsonValue>();
   readonly #activeOperations = new Set<Promise<unknown>>();
   #dirty = false;
   #changeVersion = 0;
@@ -524,6 +526,12 @@ export class Engine implements PersistenceMarker {
         restored?.devices[id] as RestoredDeviceState | undefined,
       );
       this.#devices.set(id, device);
+      if (deviceConfiguration.extra !== undefined) {
+        this.#extras.set(
+          entityKey({ kind: EntityKind.Device, id }),
+          structuredClone(deviceConfiguration.extra),
+        );
+      }
       this.#pluginTypes.set(entityKey({ kind: EntityKind.Device, id }), plugin.type);
       this.#pluginVersions.set(entityKey({ kind: EntityKind.Device, id }), plugin.version);
 
@@ -548,6 +556,12 @@ export class Engine implements PersistenceMarker {
           device,
         );
         this.#datastreams.set(datastreamId, datastream);
+        if (datastreamConfiguration.extra !== undefined) {
+          this.#extras.set(
+            entityKey({ kind: EntityKind.Datastream, id: datastreamId }),
+            structuredClone(datastreamConfiguration.extra),
+          );
+        }
         device.registerDatastream(datastreamName, datastream);
         const deviceRef: EntityRef = { kind: EntityKind.Device, id };
         const datastreamRef: EntityRef = { kind: EntityKind.Datastream, id: datastreamId };
@@ -558,7 +572,7 @@ export class Engine implements PersistenceMarker {
       device.recompute();
     }
 
-    for (const assetName of Object.keys(configuration.assets)) {
+    for (const [assetName, assetConfiguration] of Object.entries(configuration.assets)) {
       const id = assetIdForName(assetName);
       const asset = new Asset(
         { id, name: assetName, engineId: this.id },
@@ -569,6 +583,12 @@ export class Engine implements PersistenceMarker {
         restored?.assets[id] as RestoredAssetState | undefined,
       );
       this.#assets.set(id, asset);
+      if (assetConfiguration.extra !== undefined) {
+        this.#extras.set(
+          entityKey({ kind: EntityKind.Asset, id }),
+          structuredClone(assetConfiguration.extra),
+        );
+      }
     }
 
     for (const [assetName, assetConfiguration] of Object.entries(configuration.assets)) {
@@ -623,6 +643,12 @@ export class Engine implements PersistenceMarker {
           asset,
         );
         this.#applications.set(id, application);
+        if (applicationConfiguration.extra !== undefined) {
+          this.#extras.set(
+            entityKey({ kind: EntityKind.Application, id }),
+            structuredClone(applicationConfiguration.extra),
+          );
+        }
         asset.registerApplication(application);
         const assetRef: EntityRef = { kind: EntityKind.Asset, id: assetIdForName(assetName) };
         const applicationRef: EntityRef = { kind: EntityKind.Application, id };
@@ -780,11 +806,13 @@ export class Engine implements PersistenceMarker {
     const parent = this.#parents.get(entityKey(ref));
     const datafeeds = this.#datafeeds.get(entityKey(ref));
     const pluginType = this.#pluginTypes.get(entityKey(ref));
+    const extra = this.#extras.get(entityKey(ref));
     return {
       entityType: ref.kind,
       entityId: ref.id,
       entityName: this.entityName(ref),
       ...(pluginType === undefined ? {} : { pluginType }),
+      ...(extra === undefined ? {} : { extra: structuredClone(extra) }),
       relationships: {
         ...(parent === undefined ? {} : { parent: { ...parent } }),
         children: (this.#children.get(entityKey(ref)) ?? []).map((child) => ({ ...child })),

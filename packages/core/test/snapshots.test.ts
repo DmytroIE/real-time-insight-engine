@@ -21,7 +21,7 @@ interface CalculationState {
 
 const settingsSchema = { type: 'object', additionalProperties: false } as const;
 
-const createEngine = (applicationFails = false): Engine => {
+const createEngine = (applicationFails = false, clock = new FakeClock(1_000, 0)): Engine => {
   const device: DevicePlugin = {
     kind: 'device',
     type: asPluginTypeId('sxs.test-device'),
@@ -61,22 +61,26 @@ const createEngine = (applicationFails = false): Engine => {
     devices: {
       'device-1': {
         type: device.type,
+        extra: { modbus: { registers: { childrenError: 205 } } },
         datastreams: {
           temperature: {
             maxBufferLength: 6,
             maxBufferAgeMs: 60_000,
             expectedIntervalMs: 100,
+            extra: { opcua: { node: 'ns=2;s=Temperature' } },
           },
         },
       },
     },
     assets: {
       'asset-1': {
+        extra: { cloud: { resource: 'trap-1' } },
         applications: [
           {
             id: 'application-1',
             type: application.type,
             runIntervalMs: 100,
+            extra: { modbus: { registers: { currState: 27 } } },
             datafeeds: { temperature: 'device-1/temperature' },
           },
         ],
@@ -84,7 +88,7 @@ const createEngine = (applicationFails = false): Engine => {
     },
   };
   return new Engine(configuration, {
-    clock: new FakeClock(1_000, 0),
+    clock,
     timers: new FakeTimerScheduler(),
     plugins,
   });
@@ -115,6 +119,7 @@ describe('SNAP-01 immutable entity DTO', () => {
       entityId: 'asset-1/application-1',
       entityName: 'application-1',
       pluginType: 'sxs.test-application',
+      extra: { modbus: { registers: { currState: 27 } } },
       relationships: {
         parent: { kind: EntityKind.Asset, id: 'asset-1' },
         children: [],
@@ -123,9 +128,9 @@ describe('SNAP-01 immutable entity DTO', () => {
         },
       },
       state: {
-        lastRunTimestamp: 0,
-        lastUpdateTimestamp: 0,
-        nextRunTimestamp: 100,
+        lastRunTimestamp: 1_000,
+        lastUpdateTimestamp: 1_000,
+        nextRunTimestamp: 1_100,
         currState: ProcessState.Undefined,
         noDataError: false,
         appError: false,
@@ -149,6 +154,25 @@ describe('SNAP-01 immutable entity DTO', () => {
     ).toMatchObject({
       currState: ProcessState.Undefined,
     });
+  });
+
+  it('returns immutable copied metadata for every entity type', () => {
+    const engine = createEngine();
+    const response = engine.snapshot({ entities: allEntitySelectors });
+
+    expect(response.entities.device['device-1']?.extra).toEqual({
+      modbus: { registers: { childrenError: 205 } },
+    });
+    expect(response.entities.datastream['device-1/temperature']?.extra).toEqual({
+      opcua: { node: 'ns=2;s=Temperature' },
+    });
+    expect(response.entities.asset['asset-1']?.extra).toEqual({ cloud: { resource: 'trap-1' } });
+    expect(response.entities.application['asset-1/application-1']?.extra).toEqual({
+      modbus: { registers: { currState: 27 } },
+    });
+    expect(() => {
+      (response.entities.device['device-1']?.extra as { modbus: object }).modbus = {};
+    }).toThrow();
   });
 
   it('includes hasError for every entity and childrenError for parent entities', () => {
@@ -199,7 +223,9 @@ describe('SNAP-02 selector relationship expansion', () => {
 
 describe('SNAP-03 and SNAP-07 indexed whole-Engine and diagnostic snapshots', () => {
   it('indexes every entity and active diagnostic by lowercase type and source ID', async () => {
-    const engine = createEngine(true);
+    const clock = new FakeClock(1_000, 0);
+    const engine = createEngine(true, clock);
+    clock.advanceBy(100);
     await engine.runApplication(asApplicationId('asset-1/application-1'));
 
     const response = engine.snapshot({
@@ -227,7 +253,9 @@ describe('SNAP-03 and SNAP-07 indexed whole-Engine and diagnostic snapshots', ()
   });
 
   it('filters entities and diagnostics by optional type and source ID', async () => {
-    const engine = createEngine(true);
+    const clock = new FakeClock(1_000, 0);
+    const engine = createEngine(true, clock);
+    clock.advanceBy(100);
     await engine.runApplication(asApplicationId('asset-1/application-1'));
 
     const allEntities = engine.snapshot({ entities: allEntitySelectors });

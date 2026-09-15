@@ -151,7 +151,13 @@ describe('Engine Input readiness and completion', () => {
       type: 'engine.lifecycle',
       timestamp: 2_000,
       source: { engineId: asEngineId('engine-1') },
-      data: { state: 'ready', ready: true, sessionId: 'session-1', cleanSession: false },
+      data: {
+        state: 'ready',
+        ready: true,
+        sessionId: 'session-1',
+        sessionStartTimestamp: 2_000,
+        cleanSession: false,
+      },
     });
 
     await expect(queued).resolves.toBeUndefined();

@@ -252,7 +252,7 @@ The node is justified even though common validation is small: it gives every sou
 
 Retain the event-bus idea. It provides useful decoupling: domain instances publish events without knowing which subscribers exist. The change is to scope the bus to an `Engine`, rather than using one process-global singleton, and to provide a Node-RED adapter at its boundary.
 
-The Engine Message Receiver references an engine, subscribes to event-name patterns, and emits all matching events through **one output**. Its editor can accept patterns such as `entity.updated`, `diagnostic.*`, or `*`. A Switch node can route by `msg.topic` or `msg.event.type` when routing is wanted. Multiple receiver nodes may subscribe independently to the same engine, so each downstream subsystem can choose its own filter.
+The Engine Message Receiver references an engine, subscribes to event-name patterns, and emits all matching events through **one output**. Its editor can accept patterns such as `entity.updated`, `application.executed`, `diagnostic.*`, or `*`. A Switch node can route by `msg.topic` or `msg.event.type` when routing is wanted. Multiple receiver nodes may subscribe independently to the same engine, so each downstream subsystem can choose its own filter.
 
 Like a node referencing an MQTT broker configuration, a receiver on any flow tab can reference the single engine config node. Consumer-specific mapping remains in downstream Function or custom nodes and is deliberately not part of this package.
 
@@ -285,10 +285,10 @@ Instances may publish typed domain events freely through their injected `EventSi
 
 To tame bursts without coupling producers to consumers, Engine Message Receiver supports two delivery policies per receiver:
 
-- **Immediate:** forward each matching event in order. This is mandatory for `engine.lifecycle`, `engine.ready`, `diagnostic.raised`, `diagnostic.cleared`, and material `diagnostic.updated` events.
-- **Coalesced:** for coalescible events such as `entity.updated`, retain only the latest event for each `(event.type, source.entityType, source.entityId)` during a short trailing window. Start with 100 ms and enforce a 500 ms maximum latency so continuous updates cannot postpone delivery indefinitely.
+- **Immediate:** forward each matching event in publication order.
+- **Batch:** the first matching event starts a fixed `batchWindowMs` window. At expiry the Receiver emits one `engine.event-batch` message containing every matching event in arrival order. `batchWindowMs` is an integer from 1,000 through 10,000 milliseconds, defaulting to 1,000. Its FIFO buffer retains 2 through 100 events, defaulting to 100; if full, it removes the oldest event and includes the count in `data.droppedEventCount`.
 
-`diagnostic.updated` is emitted only for a material change in severity, message, or details; observing the identical active condition again may update internal `lastObservedTs` and occurrence count without publishing another event. Receivers may additionally rate-limit repeated non-state telemetry, but they must never invent diagnostic clears or maintain the authoritative diagnostic registry. Reconciliation remains Engine-owned because it must be identical for every receiver, persisted once, and available through snapshots even when no receiver exists.
+Batch mode does not coalesce event identities or reorder by timestamps. It is an eventual, bounded delivery policy for dashboard/protocol state synchronization; a second Immediate Receiver may independently consume readiness or alarm transitions. `diagnostic.updated` is emitted only for a material change in severity, message, or details; observing the identical active condition again may update internal `lastObservedTs` and occurrence count without publishing another event. Reconciliation remains Engine-owned because it must be identical for every receiver, persisted once, and available through snapshots even when no receiver exists.
 
 ### Engine State Snapshot node
 
@@ -325,7 +325,7 @@ interface SnapshotRequest {
 
 Every selector requires a concrete type and `ids`, which may be one runtime ID, a nonempty ID array, or `'*'`. The wildcard is permitted only for `ids`; omitted IDs and wildcard types are invalid. Entity selectors always include their directly selected entities and may additionally include the direct parent, children, and Application datafeeds with boolean flags. Missing relationships do not fail the request. Multiple selectors are unioned, and an entity appears once; a complete-state selection overrides a projected selection for that entity. State paths apply to all entities selected or expanded by that selector, and unavailable paths are omitted without an error. Diagnostic selectors accept no entity options. The response indexes entity views by lowercase entity type and runtime ID, for example `entities.datastream["Device%201/temp1"]`, and diagnostics by lowercase category and source ID, for example `diagnostics.datastream["Device%201/temp1"]`. Every group key is present even when empty. Use simple validated dotted paths rather than executing arbitrary JSONata or JavaScript in the core.
 
-Every response is a deep serializable copy/DTO. It contains no methods, timers, event emitters, or mutable references to Engine objects. A missing entity or invalid request is passed to `done(error)` and does not mutate Engine state.
+Every response is a deep serializable copy/DTO. It contains no methods, timers, event emitters, or mutable references to Engine objects. A concrete entity may include an optional free-form JSON `extra` value from its configuration. The Engine never reads this metadata for domain behavior or persistence; consumers can use it for protocol/node mappings while keeping the mapping beside the configured entity. A missing entity or invalid request is passed to `done(error)` and does not mutate Engine state.
 
 ### Engine readiness and Gatekeeper flows
 
@@ -344,6 +344,7 @@ Every lifecycle transition is published on the internal bus and converted by Eng
       "state": "ready",
       "ready": true,
       "sessionId": "1788100000000",
+      "sessionStartTimestamp": 1788100000000,
       "cleanSession": false
     }
   }
@@ -428,7 +429,7 @@ Use a monotonic clock for elapsed-time scheduling where Node.js provides one, wh
 - restored Application and Datastream due timestamps are recalculated from their restored last-run/last-update timestamps and the active configured interval;
 - future persisted due times beyond a reasonable clock-skew tolerance are recalculated.
 
-Do not restore persisted `nextRunTs` or `nextUpdTs` as authoritative scheduling state. A configuration change made while a Node-RED flow is stopped must take effect immediately on restart: calculate each deadline from its restored `lastRunTs` or `lastUpdTs` plus the currently configured interval. An overdue application runs once; its execution sets `lastRunTs` to the current Unix timestamp and `nextRunTs` to `lastRunTs + runInterval`. Missed historical intervals are not replayed. A new Datastream initializes its last-update timestamp from the session start so its configured startup grace remains intact.
+Do not restore persisted `nextRunTs` or `nextUpdTs` as authoritative scheduling state. A configuration change made while a Node-RED flow is stopped must take effect immediately on restart: calculate each deadline from its restored `lastRunTs` or `lastUpdTs` plus the currently configured interval. An overdue application runs once; its execution sets `lastRunTs` to the current Unix timestamp and `nextRunTs` to `lastRunTs + runInterval`. Missed historical intervals are not replayed. A new Application initializes its last-run and last-update timestamps from session start, so its first run is due after one configured run interval. A new Datastream initializes its last-update timestamp from session start so its configured startup grace remains intact.
 
 Ensure one stale check or plugin execution failure cannot stop either scheduler. Scheduler tasks must be isolated, awaited, and reported through the Engine diagnostic service.
 
@@ -462,7 +463,7 @@ export interface StateStore {
 
 Provide a Node-RED context adapter as the primary implementation. Because `/etc/node_red/settings.js` is accessible, the deployment can enable Node-RED's built-in `localfilesystem` context store. Name this store `ieps` (Insight Engine Persistent Storage). By default it persists beneath the Node-RED user directory, `/etc/node_red/data`, and coalesces writes according to its configured flush interval. The engine configuration selects `ieps` but remains independent of its implementation through `StateStore`.
 
-Do not have the npm package edit `settings.js` automatically. The Engine config node trims its Context store setting and uses the selected named store when it is configured. If the setting is blank or names an unavailable store, it starts with Node-RED's configured default store instead, emits `node.warn`, and shows a yellow `ready: default context store` status. When `contextStorage.default` names a configured provider, that provider is selected explicitly; otherwise the adapter omits the store selector and lets Node-RED choose its built-in default. This preserves Node-RED's normal fallback behavior but can make Engine state volatile, so production deployments that require restart recovery must still configure and select `ieps`. A package-owned file adapter remains an optional fallback for deployments where changing `settings.js` is undesirable or unsupported.
+Do not have the npm package edit `settings.js` automatically. The Engine config node trims its Context store setting and uses the selected named store when it is configured. If the setting is blank, it starts with Node-RED's configured default store instead, emits `node.warn` with `The "Context store" input field is empty; using the Node-RED default context store`, and shows a yellow `ready: default context store` status. An unavailable store emits a warning that names the unavailable store and uses the same fallback. When `contextStorage.default` names a configured provider, that provider is selected explicitly; otherwise the adapter omits the store selector and lets Node-RED choose its built-in default. This preserves Node-RED's normal fallback behavior but can make Engine state volatile, so production deployments that require restart recovery must still configure and select `ieps`. A package-owned file adapter remains an optional fallback for deployments where changing `settings.js` is undesirable or unsupported.
 
 Any package-owned file adapter should use a private subdirectory under `/etc/node_red/data`, verify it is writable at startup, and:
 
@@ -550,7 +551,7 @@ Use explicit base-state fields and deterministic parent aggregation:
 
 Before every Application evaluation, the base runner updates its run scheduling metadata and refreshes the stale status of every required Datastream. The evaluator receives the prior `currState`, `noDataError`, `appError`, and cloned `pluginState`, allowing a plugin to apply its own domain-specific grace and transition rules.
 
-Every successful evaluator result is a complete declaration of `pluginState`, `currState`, `noDataError`, and `appError`; the runner replaces its previous values atomically rather than merging or defaulting omitted fields. If plugin execution throws, the runner discards the incomplete result and forces `currState = Undefined (0)`, `noDataError = false`, and `appError = true` while raising/updating its execution diagnostic. Every completed run persists scheduling metadata, but only a material result change updates `lastUpdateTimestamp`, emits `entity.updated`, and requests Asset recomputation.
+Every successful evaluator result is a complete declaration of `pluginState`, `currState`, `noDataError`, and `appError`; the runner replaces its previous values atomically rather than merging or defaulting omitted fields. If plugin execution throws, the runner discards the incomplete result and forces `currState = Undefined (0)`, `noDataError = false`, and `appError = true` while raising/updating its execution diagnostic. Every completed due run emits `application.executed` with `success`, `resultChanged`, and committed run/update timestamps. Only a material result change updates `lastUpdateTimestamp`, emits `entity.updated` before `application.executed`, and requests Asset recomputation.
 
 The diagnostic rule remains separate from these booleans: a thrown evaluation cannot authoritatively reconcile plugin-owned condition diagnostics, so those diagnostics remain active until the next successful evaluation. This does not change the failed run's common state values.
 
@@ -692,7 +693,7 @@ Test the domain library without starting Node-RED. Inject a fake clock so interv
 - serialization/restoration of every state type;
 - diagnostic raise/update/clear reconciliation, including no clearing after a failed evaluation;
 - scoped diagnostic reporting without explicit null clears or duplicate-code events;
-- immediate delivery of lifecycle/diagnostic transitions and bounded coalescing of entity updates;
+- immediate or bounded fixed-window batch Receiver delivery;
 - isolation between diagnostic owner scopes;
 - persistence and restoration of condition diagnostics;
 - removal of old session diagnostics, reset of `sessionStartTs`, and creation of `SYSTEM_STARTED` at every new session;
@@ -785,7 +786,7 @@ The following points are now decided:
 - missing Snapshot paths and relationships are omitted without failing the request;
 - instances report typed events and diagnostics without knowing subscribers or constructing clear messages;
 - the Engine owns the single persistent diagnostic registry and complete-set reconciliation after successful evaluations;
-- Receiver immediately delivers lifecycle and diagnostic transitions and may coalesce noisy entity updates by source with bounded latency;
+- Receiver either immediately delivers matching events or emits every matching event in an ordered bounded fixed-window batch;
 - active condition diagnostics persist with entity state; session diagnostics are discarded at the next engine session;
 - readiness is an Engine-owned level state; Receiver replays `engine.lifecycle`, and only its `ready` state opens external gates;
 - every new engine session resets `sessionStartTs`, adds `SYSTEM_STARTED`, and publishes `engine.ready` after infrastructure startup succeeds so consumers can request a whole-Engine snapshot.

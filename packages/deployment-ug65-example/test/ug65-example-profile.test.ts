@@ -88,6 +88,7 @@ describe('PROFILE-02 validated example configuration', () => {
       maxBufferAgeMs: 1_800_000,
       expectedIntervalMs: 600_000,
       gracePeriodCoefficient: 2,
+      extra: { modbus: { registers: { value: 301 } } },
     });
     expect(configuration.assets['steam-trap-1']?.applications[0]?.settings).toEqual({
       tempDiffMargin: 0.5,

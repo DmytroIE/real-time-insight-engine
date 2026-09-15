@@ -132,8 +132,8 @@ export class Application<PluginState extends object = Record<string, unknown>> {
       pluginType: options.pluginType,
     };
     this.#datafeeds = { ...datafeeds };
-    this.#lastRunTimestamp = restored.lastRunTimestamp ?? 0;
-    this.#lastUpdateTimestamp = restored.lastUpdateTimestamp ?? 0;
+    this.#lastRunTimestamp = restored.lastRunTimestamp ?? options.sessionStartTimestamp;
+    this.#lastUpdateTimestamp = restored.lastUpdateTimestamp ?? options.sessionStartTimestamp;
     this.#nextRunTimestamp = this.#lastRunTimestamp + options.runIntervalMs;
     this.#currState = restored.currState ?? ProcessState.Undefined;
     this.#noDataError = restored.noDataError ?? false;
@@ -184,7 +184,7 @@ export class Application<PluginState extends object = Record<string, unknown>> {
       calculationScope.complete();
       assetCalculationScope.complete();
       this.#diagnostics.createScope(this.scopeIdentity('application-runner')).complete();
-      this.finishRun(now, !isDeepStrictEqual(previousResult, this.resultState()));
+      this.finishRun(now, !isDeepStrictEqual(previousResult, this.resultState()), true);
       return 'completed';
     } catch (error) {
       calculationScope.discard();
@@ -199,7 +199,7 @@ export class Application<PluginState extends object = Record<string, unknown>> {
         message: error instanceof Error ? error.message : 'Application execution failed',
       });
       runnerScope.complete();
-      this.finishRun(now, !isDeepStrictEqual(previousResult, this.resultState()));
+      this.finishRun(now, !isDeepStrictEqual(previousResult, this.resultState()), false);
       return 'failed';
     } finally {
       this.#running = false;
@@ -238,18 +238,28 @@ export class Application<PluginState extends object = Record<string, unknown>> {
     };
   }
 
-  private finishRun(timestamp: number, stateChanged: boolean): void {
+  private finishRun(timestamp: number, stateChanged: boolean, success: boolean): void {
     this.#persistence.markDirty();
-    if (!stateChanged) {
-      return;
+    if (stateChanged) {
+      this.#lastUpdateTimestamp = timestamp;
+      this.#eventSink.publish({
+        type: 'entity.updated',
+        timestamp,
+        source: this.#source,
+      });
+      this.#parent?.requestRecompute();
     }
-    this.#lastUpdateTimestamp = timestamp;
     this.#eventSink.publish({
-      type: 'entity.updated',
+      type: 'application.executed',
       timestamp,
       source: this.#source,
+      data: {
+        success,
+        resultChanged: stateChanged,
+        lastRunTimestamp: this.#lastRunTimestamp,
+        lastUpdateTimestamp: this.#lastUpdateTimestamp,
+      },
     });
-    this.#parent?.requestRecompute();
   }
 
   private scopeIdentity(ownerScope: string): DiagnosticScopeIdentity {

@@ -53,11 +53,13 @@
     devices: {
       'Device 1 - full': {
         type: 'sxs.enless-twin-temp',
+        extra: { modbus: { registers: { childrenError: 205 } } },
         datastreams: {
           temp1: {
             maxBufferLength: 6,
             maxBufferAgeMs: 60000,
             expectedIntervalMs: 10000,
+            extra: { modbus: { registers: { value: 301 } } },
           },
           temp2: {
             maxBufferLength: 6,
@@ -75,9 +77,11 @@
     },
     assets: {
       'Trap 1 - full': {
+        extra: { modbus: { registers: { childrenError: 401 } } },
         applications: {
           'Failed closed - full': {
             type: 'sxs.twin-temp-failed-closed',
+            extra: { modbus: { registers: { currState: 27 } } },
             runIntervalMs: 120000,
             settings: {
               tempDiffMargin: 0.4,
@@ -203,6 +207,11 @@
     <code>1000</code> milliseconds.
   </p>
   <p>
+    On an empty or clean Engine session, each Application first evaluates after one configured
+    <code>runIntervalMs</code>. Restored Applications retain their prior last-run timestamp, so
+    overdue work after a normal restart runs once without replaying missed intervals.
+  </p>
+  <p>
     Device-type Datastream settings provision declared streams. Application datafeed settings
     override them; when several Applications use one Datastream, their defaults use the largest
     buffer length, largest buffer age, smallest expected interval, and largest grace coefficient.
@@ -214,6 +223,13 @@
   <p>
     Device, Asset, Datastream, and Application names are object keys. They may contain spaces,
     slashes, and Unicode characters. Use those same names in datafeed mappings.
+  </p>
+  <p>
+    Each concrete Device, Datastream, Asset, and Application may include an optional
+    <code>extra</code> field containing arbitrary JSON metadata. The Engine does not interpret
+    or persist it. It is returned as <code>extra</code> on that entity's Snapshot, so consumer
+    flows can keep protocol mappings such as Modbus registers or OPC UA nodes beside the entity
+    they map.
   </p>
   <p>
     <b>Context store</b> selects where Engine state is saved. Use a persistent

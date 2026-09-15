@@ -22,8 +22,12 @@ export {
 } from './engine-input';
 export {
   createEngineMessageReceiver,
-  DEFAULT_RECEIVER_MAXIMUM_DELAY_MS,
-  DEFAULT_RECEIVER_TRAILING_DELAY_MS,
+  DEFAULT_RECEIVER_BATCH_MAX_EVENTS,
+  DEFAULT_RECEIVER_BATCH_WINDOW_MS,
+  MAX_RECEIVER_BATCH_MAX_EVENTS,
+  MAX_RECEIVER_BATCH_WINDOW_MS,
+  MIN_RECEIVER_BATCH_MAX_EVENTS,
+  MIN_RECEIVER_BATCH_WINDOW_MS,
   parseEventPatterns,
   registerEngineMessageReceiverNode,
   toReceiverMessage,

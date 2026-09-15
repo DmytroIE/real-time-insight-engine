@@ -215,9 +215,10 @@ describe('ENG-02 atomic graph validation', () => {
 describe('ENG-03 Engine isolation', () => {
   it('isolates registries, buses, dirty state, and parent timers', async () => {
     const plugins = createPlugins();
+    const firstClock = new FakeClock(1_000, 0);
     const firstTimers = new FakeTimerScheduler();
     const secondTimers = new FakeTimerScheduler();
-    const first = createEngine(configuration('engine-1'), plugins, undefined, firstTimers);
+    const first = createEngine(configuration('engine-1'), plugins, firstClock, firstTimers);
     const second = createEngine(configuration('engine-2'), plugins, undefined, secondTimers);
     const firstEvents: EngineEvent[] = [];
     const secondEvents: EngineEvent[] = [];
@@ -227,12 +228,16 @@ describe('ENG-03 Engine isolation', () => {
     secondEvents.length = 0;
     const firstTimerBaseline = firstTimers.pendingCount;
     const secondTimerBaseline = secondTimers.pendingCount;
+    firstClock.advanceBy(100);
 
     await expect(first.runApplication(asApplicationId('asset-1/application-1'))).resolves.toBe(
       'completed',
     );
 
-    expect(firstEvents).toHaveLength(1);
+    expect(firstEvents.map((event) => event.type)).toEqual([
+      'entity.updated',
+      'application.executed',
+    ]);
     expect(secondEvents).toEqual([]);
     expect(first.dirty).toBe(true);
     expect(second.dirty).toBe(false);

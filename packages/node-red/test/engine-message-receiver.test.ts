@@ -32,7 +32,13 @@ class ReplayEventSource {
     type: 'engine.lifecycle',
     timestamp: 1_000,
     source: { engineId: asEngineId('engine-1') },
-    data: { state: 'ready', ready: true, sessionId: 'session-1', cleanSession: false },
+    data: {
+      state: 'ready',
+      ready: true,
+      sessionId: 'session-1',
+      sessionStartTimestamp: 1_000,
+      cleanSession: false,
+    },
   };
 
   public get activeSubscriptions(): number {
@@ -104,7 +110,6 @@ class TestDeliveryRuntime implements ReceiverTimerScheduler {
   #now = 0;
 
   public readonly options: EngineMessageReceiverOptions = {
-    now: () => this.#now,
     timers: this,
   };
 
@@ -162,8 +167,6 @@ describe('Engine Message Receiver', () => {
       source: { engineId: asEngineId('engine-1') },
       data: { message: 'ignored' },
     });
-    runtime.advanceBy(100);
-
     expect(node.send).toHaveBeenCalledTimes(2);
     expect(node.send.mock.calls.map(([message]) => message.topic)).toEqual([
       'diagnostic.raised',
@@ -222,7 +225,6 @@ describe('Engine Message Receiver', () => {
 
     source.publish(entityEvent());
     source.publish(diagnosticEvent());
-    runtime.advanceBy(100);
     entityReceiver.close();
     source.publish(diagnosticEvent());
 
@@ -242,12 +244,18 @@ describe('Engine Message Receiver', () => {
       topic: 'engine.lifecycle',
       event: expect.objectContaining({
         type: 'engine.lifecycle',
-        data: { state: 'ready', ready: true, sessionId: 'session-1', cleanSession: false },
+        data: {
+          state: 'ready',
+          ready: true,
+          sessionId: 'session-1',
+          sessionStartTimestamp: 1_000,
+          cleanSession: false,
+        },
       }),
     });
   });
 
-  it('NR-17 close removes its listener and leaves no pending timers', () => {
+  it('NR-17 close removes its listener and clears its pending batch timer', () => {
     const source = new ReplayEventSource();
     const node = testNode();
     const runtime = new TestDeliveryRuntime();
@@ -255,7 +263,7 @@ describe('Engine Message Receiver', () => {
       node as unknown as Pick<Node, 'send'>,
       source,
       'entity.updated',
-      runtime.options,
+      { ...runtime.options, batchMode: true },
     );
     source.publish(entityEvent());
 
@@ -269,7 +277,7 @@ describe('Engine Message Receiver', () => {
     expect(runtime.pendingTimers).toBe(0);
   });
 
-  it('NR-18 delivers lifecycle and diagnostic transitions immediately and in order', () => {
+  it('NR-18 immediately delivers every matching event in publication order', () => {
     const source = new ReplayEventSource();
     const node = testNode();
     const runtime = new TestDeliveryRuntime();
@@ -286,88 +294,108 @@ describe('Engine Message Receiver', () => {
 
     expect(node.send.mock.calls.map(([message]) => message.topic)).toEqual([
       'engine.lifecycle',
+      'entity.updated',
       'diagnostic.raised',
       'diagnostic.updated',
       'diagnostic.cleared',
     ]);
-    runtime.advanceBy(100);
-    expect(node.send.mock.calls.at(-1)?.[0].topic).toBe('entity.updated');
+    expect(node.send.mock.calls.at(-1)?.[0].topic).toBe('diagnostic.cleared');
   });
 
-  it('NR-19 retains only the latest eligible event for each event/source key', () => {
+  it('NR-19 batches matching events in arrival order over a fixed window', () => {
     const source = new ReplayEventSource();
     const node = testNode();
     const runtime = new TestDeliveryRuntime();
-    createEngineMessageReceiver(
-      node as unknown as Pick<Node, 'send'>,
-      source,
-      'entity.updated',
-      runtime.options,
-    );
+    createEngineMessageReceiver(node as unknown as Pick<Node, 'send'>, source, '*', {
+      ...runtime.options,
+      batchMode: true,
+      batchWindowMs: 1_000,
+      batchMaxEvents: 10,
+    });
 
     source.publish(entityEvent('asset-1/application-1', 1_100));
     runtime.advanceBy(50);
-    source.publish(entityEvent('asset-1/application-1', 1_200));
-    runtime.advanceBy(99);
+    source.publish(diagnosticEvent());
+    runtime.advanceBy(949);
     expect(node.send).not.toHaveBeenCalled();
     runtime.advanceBy(1);
 
     expect(node.send).toHaveBeenCalledOnce();
-    expect(node.send.mock.calls[0]?.[0].event.timestamp).toBe(1_200);
+    expect(node.send.mock.calls[0]?.[0]).toMatchObject({
+      topic: 'engine.event-batch',
+      event: {
+        type: 'engine.event-batch',
+        data: {
+          droppedEventCount: 0,
+          events: expect.arrayContaining([
+            expect.objectContaining({ type: 'entity.updated' }),
+            expect.objectContaining({ type: 'diagnostic.raised' }),
+          ]),
+        },
+      },
+    });
   });
 
-  it('NR-20 uses a 100 ms trailing delay capped at 500 ms', () => {
+  it('NR-20 removes oldest events and reports the count when a batch reaches its limit', () => {
     const source = new ReplayEventSource();
     const node = testNode();
     const runtime = new TestDeliveryRuntime();
-    createEngineMessageReceiver(
-      node as unknown as Pick<Node, 'send'>,
-      source,
-      'entity.updated',
-      runtime.options,
-    );
+    createEngineMessageReceiver(node as unknown as Pick<Node, 'send'>, source, 'entity.updated', {
+      ...runtime.options,
+      batchMode: true,
+      batchWindowMs: 1_000,
+      batchMaxEvents: 2,
+    });
 
     source.publish(entityEvent('asset-1/application-1', 1));
-    runtime.advanceBy(99);
-    expect(node.send).not.toHaveBeenCalled();
-    runtime.advanceBy(1);
-    expect(node.send).toHaveBeenCalledOnce();
-
-    node.send.mockClear();
     source.publish(entityEvent('asset-1/application-1', 2));
-    for (let index = 3; index <= 7; index += 1) {
-      runtime.advanceBy(90);
-      source.publish(entityEvent('asset-1/application-1', index));
-    }
-    runtime.advanceBy(49);
-    expect(node.send).not.toHaveBeenCalled();
-    runtime.advanceBy(1);
+    source.publish(entityEvent('asset-1/application-1', 3));
+    runtime.advanceBy(1_000);
 
     expect(node.send).toHaveBeenCalledOnce();
-    expect(node.send.mock.calls[0]?.[0].event.timestamp).toBe(7);
+    expect(node.send.mock.calls[0]?.[0].event.data).toMatchObject({
+      droppedEventCount: 1,
+      events: [{ timestamp: 2 }, { timestamp: 3 }],
+    });
   });
 
-  it('NR-21 isolates source buffers and never delays noncoalescible events', () => {
+  it('NR-21 starts its next fixed window only after the previous batch is delivered', () => {
     const source = new ReplayEventSource();
     const node = testNode();
     const runtime = new TestDeliveryRuntime();
-    createEngineMessageReceiver(
-      node as unknown as Pick<Node, 'send'>,
-      source,
-      '*',
-      runtime.options,
-    );
-    node.send.mockClear();
+    createEngineMessageReceiver(node as unknown as Pick<Node, 'send'>, source, 'entity.updated', {
+      ...runtime.options,
+      batchMode: true,
+      batchWindowMs: 1_000,
+    });
 
     source.publish(entityEvent('asset-1/application-1', 1_100));
-    runtime.advanceBy(50);
+    runtime.advanceBy(1_000);
     source.publish(entityEvent('asset-2/application-1', 1_200));
-    source.publish(diagnosticEvent());
-    expect(node.send.mock.calls.map(([message]) => message.topic)).toEqual(['diagnostic.raised']);
+    runtime.advanceBy(999);
+    expect(node.send).toHaveBeenCalledOnce();
+    runtime.advanceBy(1);
+    expect(node.send).toHaveBeenCalledTimes(2);
+  });
 
-    runtime.advanceBy(50);
-    expect(node.send.mock.calls[1]?.[0].event.source.entityId).toBe('asset-1/application-1');
-    runtime.advanceBy(50);
-    expect(node.send.mock.calls[2]?.[0].event.source.entityId).toBe('asset-2/application-1');
+  it('rejects batch settings outside the configured limits', () => {
+    const source = new ReplayEventSource();
+    const node = testNode();
+    const runtime = new TestDeliveryRuntime();
+
+    expect(() =>
+      createEngineMessageReceiver(node as unknown as Pick<Node, 'send'>, source, '*', {
+        ...runtime.options,
+        batchMode: true,
+        batchWindowMs: 999,
+      }),
+    ).toThrow('Expected an integer between 1000 and 10000');
+    expect(() =>
+      createEngineMessageReceiver(node as unknown as Pick<Node, 'send'>, source, '*', {
+        ...runtime.options,
+        batchMode: true,
+        batchMaxEvents: 101,
+      }),
+    ).toThrow('Expected an integer between 2 and 100');
   });
 });

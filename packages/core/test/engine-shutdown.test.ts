@@ -131,14 +131,15 @@ const createEngine = async (
   plugins = createPlugins(),
   store: StateStore = new InMemoryStateStore(),
 ) => {
+  const clock = new FakeClock(1_000, 0);
   const timers = new FakeTimerScheduler();
   const engine = await Engine.create(configuration(), {
-    clock: new FakeClock(1_000, 0),
+    clock,
     timers,
     plugins,
     stateStore: store,
   });
-  return { engine, timers };
+  return { clock, engine, timers };
 };
 
 describe('LIFE-07 immediate shutdown gate', () => {
@@ -178,7 +179,8 @@ describe('LIFE-08 coordinated drain and cleanup', () => {
         }),
     );
     const store = new InMemoryStateStore();
-    const { engine, timers } = await createEngine(plugins, store);
+    const { clock, engine, timers } = await createEngine(plugins, store);
+    clock.advanceBy(100);
     const run = engine.runApplication(asApplicationId('asset-1/application-1'));
 
     const close = engine.close();

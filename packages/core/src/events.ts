@@ -27,17 +27,31 @@ interface EventEnvelope<Type extends string, Source extends EngineEventSource> {
 
 export type EntityUpdatedEvent = EventEnvelope<'entity.updated', EntityEventSource>;
 
+export interface ApplicationExecutedEvent extends EventEnvelope<
+  'application.executed',
+  EntityEventSource
+> {
+  readonly data: {
+    readonly success: boolean;
+    readonly resultChanged: boolean;
+    readonly lastRunTimestamp: number;
+    readonly lastUpdateTimestamp: number;
+  };
+}
+
 export type EngineLifecycleData =
   | {
       readonly state: 'ready';
       readonly ready: true;
       readonly sessionId: string;
+      readonly sessionStartTimestamp: number;
       readonly cleanSession: boolean;
     }
   | {
       readonly state: Exclude<EngineLifecycleState, 'ready'>;
       readonly ready: false;
       readonly sessionId: string;
+      readonly sessionStartTimestamp: number;
       readonly cleanSession: boolean;
     };
 
@@ -49,6 +63,7 @@ export interface EngineReadyEvent extends EventEnvelope<'engine.ready', EngineEv
   readonly data: {
     readonly ready: true;
     readonly sessionId: string;
+    readonly sessionStartTimestamp: number;
     readonly cleanSession: boolean;
   };
 }
@@ -85,7 +100,12 @@ export interface EngineErrorEvent extends EventEnvelope<'engine.error', EngineEv
 }
 
 export type EngineEvent =
-  EntityUpdatedEvent | EngineLifecycleEvent | EngineReadyEvent | DiagnosticEvent | EngineErrorEvent;
+  | EntityUpdatedEvent
+  | ApplicationExecutedEvent
+  | EngineLifecycleEvent
+  | EngineReadyEvent
+  | DiagnosticEvent
+  | EngineErrorEvent;
 
 export type EventListener = (event: EngineEvent) => void;
 export type Unsubscribe = () => void;

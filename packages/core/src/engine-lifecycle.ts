@@ -89,7 +89,12 @@ export class EngineLifecycleController {
         type: 'engine.ready',
         timestamp: this.#clock.wallTimeMs(),
         source: { engineId: this.#engineId },
-        data: { ready: true, sessionId: this.sessionId, cleanSession: this.#cleanSession },
+        data: {
+          ready: true,
+          sessionId: this.sessionId,
+          sessionStartTimestamp: this.sessionStartTs,
+          cleanSession: this.#cleanSession,
+        },
       });
     }
   }
@@ -111,12 +116,14 @@ export class EngineLifecycleController {
             state,
             ready: true as const,
             sessionId: this.sessionId,
+            sessionStartTimestamp: this.sessionStartTs,
             cleanSession: this.#cleanSession,
           }
         : {
             state,
             ready: false as const,
             sessionId: this.sessionId,
+            sessionStartTimestamp: this.sessionStartTs,
             cleanSession: this.#cleanSession,
           };
     return {

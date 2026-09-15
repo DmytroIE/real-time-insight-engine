@@ -53,7 +53,7 @@ npm run verify
 npm run pack:palette
 ```
 
-This creates `artifacts/node-red-contrib-sxs-industrial-0.3.0.tgz`. In Node-RED, open **Manage palette**, select **Install**, choose **Upload module tgz**, and upload that file. The archive includes the core and selected Device/Application plugins as bundled npm dependencies, so no other project archives or `settings.js` plugin-registry hook are required. Restart Node-RED and confirm that these four node types are available:
+This creates `artifacts/node-red-contrib-sxs-industrial-0.4.0.tgz`. In Node-RED, open **Manage palette**, select **Install**, choose **Upload module tgz**, and upload that file. The archive includes the core and selected Device/Application plugins as bundled npm dependencies, so no other project archives or `settings.js` plugin-registry hook are required. Restart Node-RED and confirm that these four node types are available:
 
 - `insight-engine`
 - `engine-input`
@@ -81,13 +81,17 @@ contextStorage: {
 }
 ```
 
-Select `ieps` in the Engine node. Keep `flushInterval` between 60 and 300 seconds and restart Node-RED after changing it. A blank or unavailable Context store makes the node warn and use Node-RED's default context store instead; this allows startup but is commonly memory-only, so it does not provide restart recovery. An abrupt power loss can discard updates since the last flush; verify normal restart restoration, simulated power-loss behavior, and clean startup after deleting Engine state before production use.
+Select `ieps` in the Engine node. Keep `flushInterval` between 60 and 300 seconds and restart Node-RED after changing it. A blank Context store makes the node warn `The "Context store" input field is empty; using the Node-RED default context store`; an unavailable store names the unavailable store in its warning and uses the same fallback. This allows startup but is commonly memory-only, so it does not provide restart recovery. An abrupt power loss can discard updates since the last flush; verify normal restart restoration, simulated power-loss behavior, and clean startup after deleting Engine state before production use.
 
 Each Engine config node uses its immutable Node-RED node ID to namespace persistent state; its editable Name is only a label. Deleting the config node removes that Engine's namespace after shutdown. Select **Clean session** before deployment to clear that namespace once before state restoration; the editor records a one-shot deployment request and automatically clears the checkbox. Configuration JSON uses descriptive names as object keys and structured datafeed references, so names may contain spaces or separators without becoming runtime IDs. A normal redeploy removes persisted condition diagnostics for entities no longer present in the validated configuration.
 
 The optional top-level `applicationDefaults` configuration supplies per-Application-type `runIntervalMs`, partial plugin `settings`, and partial retention settings by required datafeed name. `deviceDefaults` supplies partial plugin `settings` and partial `datastreams` settings by Device plugin type. Resolved plugin settings merge plugin manifest defaults, type defaults, then concrete Device/Application settings. For each Datastream, Device-type defaults merge first, application datafeed defaults override them by field (shared application defaults use maximum buffer length/age and minimum expected interval), and explicit Device Datastream values override last. Device-type Datastream defaults also provision declared streams without an Application mapping. `gracePeriodCoefficient` is an optional positive Datastream setting that delays an empty-buffer `NO_DATA` alarm until at least `expectedIntervalMs * gracePeriodCoefficient` has elapsed in the current Engine session; its default is `2`. A restored active `NO_DATA` condition remains active during that grace period. The Engine validates the complete resulting settings after merging; see `packages/deployment-ug65-example/settings.example.json` for a deployment example.
 
 Optional top-level `applicationScheduler` and `datastreamStaleScheduler` objects each accept positive safe-integer `batchSize` and `failureRetryDelayMs` values. Both default to a batch size of `3` and a failure retry delay of `1000` milliseconds.
+
+On an empty or clean Engine session, each Application waits one configured `runIntervalMs` from session start before its first evaluation. Restored Applications keep their persisted last-run timestamp, so overdue work after a normal restart still runs once without replaying missed intervals.
+
+Concrete Device, Datastream, Asset, and Application configuration objects may include free-form JSON `extra` metadata. The Engine does not interpret or persist it; a selected entity returns it at `msg.snapshot.entities.<type>[runtimeId].extra`. This keeps consumer mappings such as Modbus register numbers, OPC UA node IDs, or cloud routing metadata next to the entities they describe.
 
 ### Engine input
 
@@ -110,9 +114,11 @@ return msg;
 
 Entity selectors may set `parent`, `children`, `datafeeds`, and `statePaths`. Missing related entities and state paths are omitted. Selectors are unioned and deduplicated; a full-state selection overrides projections for the same entity. Entity results are indexed as `msg.snapshot.entities.<type>[runtimeId]`, such as `entities.datastream["Device%201/temp1"]`. Diagnostic results are indexed as `msg.snapshot.diagnostics.<lowercase-category>[sourceId]`, such as `diagnostics.datastream["Device%201/temp1"]`. Every entity state includes `hasError`; Device and Asset states also include `childrenError`.
 
+Entity `extra` metadata, when configured, is returned beside `state` and is always a deep immutable JSON copy. It is not affected by `statePaths`.
+
 ### Monitoring
 
-Monitor Engine lifecycle events, active diagnostics, process RSS/heap, event-loop delay, CPU, disk space, and context-store write behavior. Treat `failed` lifecycle state, repeated storage diagnostics, sustained event-loop delay, or memory growth under a representative flow as operational alerts. Lifecycle and ready events include `data.cleanSession` so consumers can identify a requested clean deployment. Receiver lifecycle and diagnostic events are never coalesced; use the replayed `engine.lifecycle` event with `msg.event.data.ready === true` to request a whole-Engine Snapshot and initialize consumers.
+Monitor Engine lifecycle events, active diagnostics, process RSS/heap, event-loop delay, CPU, disk space, and context-store write behavior. Treat `failed` lifecycle state, repeated storage diagnostics, sustained event-loop delay, or memory growth under a representative flow as operational alerts. Lifecycle and ready events include `data.cleanSession` and `data.sessionStartTimestamp` so consumers can identify a requested clean deployment and its session origin. An Engine Message Receiver with batch mode disabled forwards every event immediately. In batch mode it emits an ordered bounded `engine.event-batch` after its configured 1-to-10 second window; inspect `data.droppedEventCount` before treating it as a complete event history. Use the replayed immediate `engine.lifecycle` event with `msg.event.data.ready === true` to request a whole-Engine Snapshot and initialize consumers.
 
 Run `npm run benchmark` after `npm run build` for a repeatable Engine/plugin baseline. Override the workload with `BENCH_ITERATIONS`. On Node 18.20.8 Linux x64 in a clean container, 5,000 ingests plus 500 Application runs measured:
 

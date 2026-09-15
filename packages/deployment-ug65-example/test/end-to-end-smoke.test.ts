@@ -277,7 +277,6 @@ describe('UG65 end-to-end smoke flows', () => {
       engine,
       '*',
       {
-        now: () => clock.monotonicMs,
         timers: {
           setTimeout: (callback) => {
             callback();
@@ -288,7 +287,7 @@ describe('UG65 end-to-end smoke flows', () => {
       },
     );
 
-    clock.advanceBy(599_000);
+    clock.advanceBy(600_000);
     const input = await invokeInput(engine, clock, { sensorType: 12, temp1: 100, temp2: 90 });
     expect(input.error).toBeUndefined();
     timers.runDelay(DEFAULT_PARENT_RECOMPUTATION_DELAY_MS);
@@ -304,7 +303,7 @@ describe('UG65 end-to-end smoke flows', () => {
       5,
     );
     expect(entity(engine, EntityKind.Datastream)?.state).toMatchObject({
-      samples: [{ timestamp: 600_000, value: 100 }],
+      samples: [{ timestamp: 601_000, value: 100 }],
     });
     expect(entity(engine, EntityKind.Device)?.state).toMatchObject({ hwError: false });
     expect(entity(engine, EntityKind.Application)?.state).toMatchObject({
@@ -333,7 +332,7 @@ describe('UG65 end-to-end smoke flows', () => {
     await invokeInput(engine, clock, { sensorType: 12, temp1: 100, temp2: 90 });
     expect(diagnostics(engine, 'datastream')).toEqual([]);
 
-    clock.advanceBy(599_000);
+    clock.advanceBy(600_000);
     await invokeInput(engine, clock, { sensorType: 12, temp1: 80, temp2: 100 });
     await engine.runApplication(applicationId);
     expect(diagnostics(engine, 'application').map(({ code }) => code)).toContain(

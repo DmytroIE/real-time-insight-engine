@@ -68,6 +68,8 @@
       <code>entities.datastream["Device%201/temp1"]</code>. <code>msg.snapshot.diagnostics</code>
       is keyed by lowercase category and source ID. Every response includes all entity and diagnostic
       group keys, even when a group is empty. Each entity state includes <code>hasError</code>;
-      Device and Asset states also include <code>childrenError</code>.
+      Device and Asset states also include <code>childrenError</code>. An entity with configured
+      metadata also includes its immutable <code>extra</code> JSON value outside of
+      <code>state</code>.
     </p>
 </script>

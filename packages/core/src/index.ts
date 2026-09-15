@@ -51,6 +51,7 @@ export type {
   DatastreamConfiguration,
   DeviceConfiguration,
   EngineConfiguration,
+  JsonValue,
 } from './configuration';
 export {
   ConfigurationBuilder,
@@ -125,6 +126,7 @@ export {
   type EngineLifecycleEvent,
   type EngineLifecycleState,
   type EngineReadyEvent,
+  type ApplicationExecutedEvent,
   type EntityEventSource,
   type EntityUpdatedEvent,
   type EventListener,

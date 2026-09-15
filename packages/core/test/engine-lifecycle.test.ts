@@ -106,8 +106,14 @@ describe('LIFE-03 ready transition', () => {
     expect(engine.sessionStartTs).toBe(1_234);
     expect(engine.sessionId).toBe('1234');
     expect(readyEvents).toMatchObject([
-      { type: 'engine.lifecycle', data: { state: 'ready', ready: true, sessionId: '1234' } },
-      { type: 'engine.ready', data: { ready: true, sessionId: '1234' } },
+      {
+        type: 'engine.lifecycle',
+        data: { state: 'ready', ready: true, sessionId: '1234', sessionStartTimestamp: 1_234 },
+      },
+      {
+        type: 'engine.ready',
+        data: { ready: true, sessionId: '1234', sessionStartTimestamp: 1_234 },
+      },
     ]);
   });
 
@@ -145,7 +151,13 @@ describe('LIFE-04 lifecycle replay', () => {
     expect(events).toEqual([
       expect.objectContaining({
         type: 'engine.lifecycle',
-        data: { state: 'ready', ready: true, sessionId: engine.sessionId, cleanSession: false },
+        data: {
+          state: 'ready',
+          ready: true,
+          sessionId: engine.sessionId,
+          sessionStartTimestamp: engine.sessionStartTs,
+          cleanSession: false,
+        },
       }),
     ]);
   });
@@ -235,12 +247,14 @@ describe('LIFE-06 health and readiness', () => {
         },
       },
     };
+    const clock = new FakeClock(1_000, 0);
     const engine = await Engine.create(configuration, {
-      clock: new FakeClock(1_000, 0),
+      clock,
       timers: new FakeTimerScheduler(),
       plugins,
       stateStore: new InMemoryStateStore(),
     });
+    clock.advanceBy(100);
 
     await expect(engine.runApplication(asApplicationId('asset-1/application-1'))).resolves.toBe(
       'failed',

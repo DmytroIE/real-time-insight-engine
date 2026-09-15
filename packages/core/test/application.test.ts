@@ -17,6 +17,7 @@ import {
   type EngineEvent,
   type ParentRecomputationRequester,
   type PersistenceMarker,
+  type RestoredApplicationState,
 } from '../src';
 import { FakeClock } from './support/fake-clock';
 
@@ -71,6 +72,13 @@ const setup = (
   ) => ApplicationResult<CalculationState> | Promise<ApplicationResult<CalculationState>>,
   nextRunTimestamp = 1_000,
   lastRunTimestamp = nextRunTimestamp - 100,
+  restored: RestoredApplicationState<CalculationState> = {
+    lastRunTimestamp,
+    nextRunTimestamp,
+    currState: ProcessState.Warning,
+    noDataError: true,
+    appError: true,
+  },
 ) => {
   const clock = new FakeClock(1_000, 0);
   const eventBus = new InMemoryEventBus();
@@ -96,13 +104,7 @@ const setup = (
     diagnostics,
     persistence,
     { value: 1, label: 'initial' },
-    {
-      lastRunTimestamp,
-      nextRunTimestamp,
-      currState: ProcessState.Warning,
-      noDataError: true,
-      appError: true,
-    },
+    restored,
     parent,
   );
   return { application, clock, datastream, diagnostics, events, parent, persistence };
@@ -126,6 +128,34 @@ describe('APP-01 due and overlap policy', () => {
 
     expect(executions).toBe(0);
     expect(application.state()).toEqual(before);
+    expect(persistence.dirtyCount).toBe(0);
+  });
+
+  it('uses the session start as the fresh Application scheduling baseline', async () => {
+    let executions = 0;
+    const { application, persistence } = setup(
+      () => {
+        executions += 1;
+        return {
+          pluginState: { value: 1, label: 'initial' },
+          currState: ProcessState.Warning,
+          noDataError: true,
+          appError: true,
+        };
+      },
+      1_000,
+      900,
+      {},
+    );
+
+    expect(application.state()).toMatchObject({
+      lastRunTimestamp: 1_000,
+      lastUpdateTimestamp: 1_000,
+      nextRunTimestamp: 1_100,
+    });
+    await expect(application.runIfDue()).resolves.toBe('not-due');
+
+    expect(executions).toBe(0);
     expect(persistence.dirtyCount).toBe(0);
   });
 
@@ -250,7 +280,7 @@ describe('APP-03 successful atomic commit', () => {
 
     expect(application.state()).toMatchObject({
       lastRunTimestamp: 1_000,
-      lastUpdateTimestamp: 0,
+      lastUpdateTimestamp: 1_000,
       currState: ProcessState.Warning,
       noDataError: true,
       appError: true,
@@ -258,6 +288,54 @@ describe('APP-03 successful atomic commit', () => {
     expect(persistence.dirtyCount).toBe(1);
     expect(parent.requestCount).toBe(0);
     expect(events).not.toContainEqual(expect.objectContaining({ type: 'entity.updated' }));
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'application.executed',
+        data: expect.objectContaining({ success: true, resultChanged: false }),
+      }),
+    );
+  });
+});
+
+describe('APP-08 execution events', () => {
+  it('publishes execution after a material update with the committed timestamps', async () => {
+    const { application, events } = setup(() => ({
+      pluginState: { value: 7, label: 'complete' },
+      currState: ProcessState.Ok,
+      noDataError: false,
+      appError: false,
+    }));
+
+    await application.runIfDue();
+
+    expect(events.filter((event) => event.type === 'entity.updated')).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({
+      type: 'application.executed',
+      data: {
+        success: true,
+        resultChanged: true,
+        lastRunTimestamp: 1_000,
+        lastUpdateTimestamp: 1_000,
+      },
+    });
+  });
+
+  it('publishes a failed execution after committing the runner failure state', async () => {
+    const { application, events } = setup(() => {
+      throw new Error('calculation failed');
+    });
+
+    await application.runIfDue();
+
+    expect(events.at(-1)).toMatchObject({
+      type: 'application.executed',
+      data: {
+        success: false,
+        resultChanged: true,
+        lastRunTimestamp: 1_000,
+        lastUpdateTimestamp: 1_000,
+      },
+    });
   });
 });
 

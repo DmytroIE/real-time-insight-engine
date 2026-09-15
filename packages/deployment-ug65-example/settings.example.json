@@ -45,14 +45,46 @@
   },
   "devices": {
     "enless-twin-temp-1": {
-      "type": "sxs.enless-twin-temp"
+      "type": "sxs.enless-twin-temp",
+      "extra": {
+        "modbus": {
+          "registers": {
+            "childrenError": 205
+          }
+        }
+      },
+      "datastreams": {
+        "temp1": {
+          "extra": {
+            "modbus": {
+              "registers": {
+                "value": 301
+              }
+            }
+          }
+        }
+      }
     }
   },
   "assets": {
     "steam-trap-1": {
+      "extra": {
+        "modbus": {
+          "registers": {
+            "childrenError": 401
+          }
+        }
+      },
       "applications": {
         "failed-closed": {
           "type": "sxs.twin-temp-failed-closed",
+          "extra": {
+            "modbus": {
+              "registers": {
+                "currState": 27
+              }
+            }
+          },
           "datafeeds": {
             "tempIn": {
               "device": "enless-twin-temp-1",
