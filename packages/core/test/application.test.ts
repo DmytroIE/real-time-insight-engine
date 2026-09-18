@@ -48,6 +48,10 @@ class FakeDatastream implements ApplicationDatastream {
   public averageValue(): null {
     return null;
   }
+
+  public lastValue(): null {
+    return null;
+  }
 }
 
 class FakePersistenceMarker implements PersistenceMarker {

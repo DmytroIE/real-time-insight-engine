@@ -15,7 +15,7 @@ This catalog defines the minimum observable behavior for `IMPLEMENTATION_PLAN.md
 
 - **CFG-01:** Explicit registry resolves an installed stable type ID.
 - **CFG-02:** Duplicate or unavailable plugin type IDs fail before Engine readiness.
-- **CFG-03:** Valid configuration receives plugin, type, and concrete-entity settings without mutating raw input. Application-type defaults supply omitted Application intervals and provision mapped Datastreams; Device-type defaults provision declared Datastreams; application datafeed defaults override Device-type settings, shared application defaults aggregate by maximum buffer length/age and minimum expected interval, then explicit Device values override and final Datastream validation runs.
+- **CFG-03:** Valid configuration receives plugin, type, and concrete-entity settings without mutating raw input. A core 600000-millisecond Application interval applies before Application-type and concrete values. Core Datastream defaults (`maxBufferLength: 10`, `maxBufferAgeMs: 600000`, and `expectedIntervalMs: 60000`) apply before Device-type defaults, application datafeed defaults, and explicit Device values. Application-type defaults supply omitted Application intervals and provision mapped Datastreams; Device-type defaults provision declared Datastreams; shared application defaults aggregate by maximum buffer length/age and minimum expected interval, then final Datastream validation runs.
 - **CFG-04:** Missing required settings produce JSON-path errors.
 - **CFG-05:** Invalid intervals and buffer limits are rejected while nonempty descriptive entity names, including spaces and separators, are accepted.
 - **CFG-06:** Missing required datafeeds and unresolved structured `{ device, datastream }` mappings fail startup.
@@ -135,6 +135,13 @@ This catalog defines the minimum observable behavior for `IMPLEMENTATION_PLAN.md
 - **PLUG-APP-06:** Healthy on-state sets Ok and clears prior condition diagnostics automatically.
 - **PLUG-APP-07:** Average values and timestamps use the configured inclusive window.
 - **PLUG-APP-08:** Plugin uses scoped reporting and has no null-filled diagnostic payload.
+- **PLUG-ECO-DEV-01:** Ecobolt2 manifest exposes stable ID, four Datastreams, and no Device settings.
+- **PLUG-ECO-DEV-02:** A valid Ecobolt2 payload stores derived failed-open/active flags and supplied temperature/loss values at its source timestamp.
+- **PLUG-ECO-DEV-03:** Status bits 1, 2, and 256 set Device `hwError`, raise their matching Device diagnostics, and prevent all Datastream updates; a healthy payload clears them.
+- **PLUG-ECO-DEV-04:** Missing, nonnumeric, non-finite, or out-of-range Ecobolt2 payload fields reject the complete frame and raise `INVALID_PAYLOAD` without partial Datastream updates.
+- **PLUG-ECO-APP-01:** Ecobolt2 Failed Open exposes four required datafeeds, `windowSizeMs` defaulting to 3600000, and null-valued numerical default state.
+- **PLUG-ECO-APP-02:** Missing required values remain Undefined during grace, then report `NO_DATA` with null `trapTemp` and `losses`.
+- **PLUG-ECO-APP-03:** Complete Ecobolt2 values map failed-open to Warning/Ok and active to Active/Inactive while preserving current temperature and losses.
 - **PROFILE-01:** Example profile registers only the selected Device/Application plugins.
 - **PROFILE-02:** Example configuration validates and constructs its full graph.
 - **PROFILE-03:** Referencing an unregistered type fails before ready.

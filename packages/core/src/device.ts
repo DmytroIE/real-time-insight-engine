@@ -1,6 +1,10 @@
 import type { DatastreamSample } from './datastream-values';
 import type { DatastreamState, PersistenceMarker } from './datastream';
-import type { DiagnosticRegistry, DiagnosticScopeIdentity } from './diagnostics';
+import type {
+  DiagnosticRegistry,
+  DiagnosticReportInput,
+  DiagnosticScopeIdentity,
+} from './diagnostics';
 import type { EntityEventSource, EventSink } from './events';
 import type { DatastreamId, DeviceId, EngineId, PluginTypeId } from './identifiers';
 import { EntityKind } from './model';
@@ -22,6 +26,7 @@ export interface DevicePayloadContext {
   readonly sourceTimestamp: number;
   readonly receivedTimestamp: number;
   datastream(name: string): DeviceDatastream | undefined;
+  setHardwareDiagnostics(diagnostics: readonly DiagnosticReportInput[]): void;
 }
 
 export type DevicePayloadParseResult =
@@ -30,6 +35,7 @@ export type DevicePayloadParseResult =
       readonly accepted: false;
       readonly message: string;
       readonly details?: Readonly<Record<string, unknown>>;
+      readonly suppressDiagnostic?: boolean;
     };
 
 export interface DevicePayloadParser {
@@ -145,8 +151,9 @@ export class Device implements ParentRecomputationRequester {
         sourceTimestamp: input.sourceTimestamp,
         receivedTimestamp: input.receivedTimestamp,
         datastream: (name) => this.#datastreams.get(name),
+        setHardwareDiagnostics: (diagnostics) => this.setHardwareDiagnostics(diagnostics),
       });
-      if (!result.accepted) {
+      if (!result.accepted && !result.suppressDiagnostic) {
         scope.report({
           code: 'INVALID_PAYLOAD',
           severity: 'error',
@@ -168,16 +175,27 @@ export class Device implements ParentRecomputationRequester {
     message = 'Device hardware fault',
     details?: Readonly<Record<string, unknown>>,
   ): void {
+    this.setHardwareDiagnostics(
+      hwError
+        ? [
+            {
+              code: 'DEVICE_HARDWARE_ERROR',
+              severity: 'error',
+              message,
+              ...(details === undefined ? {} : { details }),
+            },
+          ]
+        : [],
+    );
+  }
+
+  public setHardwareDiagnostics(diagnostics: readonly DiagnosticReportInput[]): void {
+    const hwError = diagnostics.length > 0;
     this.#ownStateDirty ||= this.#hwError !== hwError;
     this.#hwError = hwError;
     const scope = this.#diagnostics.createScope(this.scopeIdentity('device-hardware'));
-    if (hwError) {
-      scope.report({
-        code: 'DEVICE_HARDWARE_ERROR',
-        severity: 'error',
-        message,
-        ...(details === undefined ? {} : { details }),
-      });
+    for (const diagnostic of diagnostics) {
+      scope.report(diagnostic);
     }
     scope.complete();
     this.recompute();

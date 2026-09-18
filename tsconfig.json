@@ -5,6 +5,8 @@
     { "path": "packages/node-red" },
     { "path": "packages/device-enless-twin-temp" },
     { "path": "packages/app-twin-temp-failed-closed" },
+    { "path": "packages/device-sxs-ecobolt2" },
+    { "path": "packages/app-ecobolt2-failed-open" },
     { "path": "packages/deployment-ug65-example" }
   ]
 }

@@ -27,6 +27,8 @@ for (const packageName of [
   'core',
   'device-enless-twin-temp',
   'app-twin-temp-failed-closed',
+  'device-sxs-ecobolt2',
+  'app-ecobolt2-failed-open',
 ]) {
   runNpm([
     'pack',

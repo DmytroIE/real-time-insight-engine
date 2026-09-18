@@ -189,6 +189,7 @@ describe('PLUG-APP-02 missing averages', () => {
         hwError: false,
         samples: [],
       }),
+      lastValue: () => null,
       averageValue: () => null,
     };
 

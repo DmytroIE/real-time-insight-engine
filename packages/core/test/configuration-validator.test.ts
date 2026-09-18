@@ -304,7 +304,7 @@ describe('CFG-03 defaults and input isolation', () => {
     });
   });
 
-  it('rejects a referenced Datastream only when merged settings remain incomplete', () => {
+  it('completes partial Datastream settings with core bootstrap defaults', () => {
     const raw = {
       applicationDefaults: {
         'sxs.test-application': {
@@ -328,10 +328,25 @@ describe('CFG-03 defaults and input isolation', () => {
       },
     };
 
-    expectConfigurationError(
-      () => build(raw),
-      '$.devices["Device 3"].datastreams.temperature.expectedIntervalMs',
-    );
+    expect(build(raw).devices['Device 3']?.datastreams?.temperature).toEqual({
+      maxBufferLength: 5,
+      maxBufferAgeMs: 1_800_000,
+      expectedIntervalMs: 60_000,
+    });
+  });
+
+  it('supplies the core Application interval when no override is configured', () => {
+    const raw = validConfiguration();
+    const assets = raw['assets'] as Record<
+      string,
+      { applications: Record<string, Record<string, unknown>> }
+    >;
+    const application = assets['asset-1']?.applications['Application 1'];
+    if (application !== undefined) {
+      delete application['runIntervalMs'];
+    }
+
+    expect(build(raw).assets['asset-1']?.applications[0]?.runIntervalMs).toBe(600_000);
   });
 });
 

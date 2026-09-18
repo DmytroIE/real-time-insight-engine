@@ -1,7 +1,7 @@
 {
-  "name": "@sxs/app-twin-temp-failed-closed",
+  "name": "@sxs/device-sxs-ecobolt2",
   "version": "0.5.0",
-  "description": "Twin-temperature failed-closed Application plugin",
+  "description": "SxS Ecobolt2 Device plugin",
   "license": "UNLICENSED",
   "engines": {
     "node": ">=18"

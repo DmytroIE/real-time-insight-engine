@@ -43,6 +43,10 @@ export {
   type ApplicationTask,
   type ApplicationTaskResult,
 } from './application-scheduler';
+export {
+  DEFAULT_APPLICATION_RUN_INTERVAL_MS,
+  DEFAULT_DATASTREAM_CONFIGURATION,
+} from './configuration';
 export type {
   ApplicationConfiguration,
   ApplicationConfigurationDefaults,
@@ -50,8 +54,11 @@ export type {
   DatafeedReference,
   DatastreamConfiguration,
   DeviceConfiguration,
+  DeviceConfigurationDefaults,
   EngineConfiguration,
+  JsonObject,
   JsonValue,
+  SchedulerConfiguration,
 } from './configuration';
 export {
   ConfigurationBuilder,

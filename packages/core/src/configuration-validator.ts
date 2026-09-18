@@ -2,6 +2,10 @@ import Ajv, { type AnySchema, type ErrorObject, type ValidateFunction } from 'aj
 
 import { asPluginTypeId, type EngineId, type PluginTypeId } from './identifiers';
 import type { PluginRegistry, ApplicationPlugin, DevicePlugin, InstalledPlugin } from './plugins';
+import {
+  DEFAULT_APPLICATION_RUN_INTERVAL_MS,
+  DEFAULT_DATASTREAM_CONFIGURATION,
+} from './configuration';
 import type {
   ApplicationConfigurationDefaults,
   ApplicationConfiguration,
@@ -385,6 +389,7 @@ export class ConfigurationBuilder {
           );
         }
         const settings = {
+          ...DEFAULT_DATASTREAM_CONFIGURATION,
           ...(typeDatastreams[datastreamName] ?? {}),
           ...(applicationDatastreams[datastreamName] ?? {}),
           ...(explicitDatastreams[datastreamName] ?? {}),
@@ -487,9 +492,7 @@ export class ConfigurationBuilder {
     }
 
     const runIntervalMs =
-      raw.runIntervalMs ??
-      defaults?.runIntervalMs ??
-      fail(`${path}.runIntervalMs`, 'is required when no application default supplies it');
+      raw.runIntervalMs ?? defaults?.runIntervalMs ?? DEFAULT_APPLICATION_RUN_INTERVAL_MS;
 
     return {
       id: name,
@@ -510,6 +513,15 @@ export class ConfigurationBuilder {
     if (device === undefined) {
       throw new ConfigurationValidationError([
         { path, message: `references unavailable device ${target.device}` },
+      ]);
+    }
+    const plugin = this.resolveDevice(device.type, path);
+    if (!plugin.datastreams.includes(target.datastream)) {
+      throw new ConfigurationValidationError([
+        {
+          path,
+          message: `references unavailable Datastream ${target.device}/${target.datastream}`,
+        },
       ]);
     }
   }
@@ -562,11 +574,12 @@ export class ConfigurationBuilder {
     datastreamName: string,
     candidate: RawDatastreamConfiguration | undefined,
   ): void {
-    if (candidate === undefined) {
-      return;
-    }
     const device = (defaults[deviceName] ??= {});
     const previous = device[datastreamName] ?? {};
+    if (candidate === undefined) {
+      device[datastreamName] = previous;
+      return;
+    }
     device[datastreamName] = {
       ...(previous.maxBufferLength === undefined && candidate.maxBufferLength === undefined
         ? {}

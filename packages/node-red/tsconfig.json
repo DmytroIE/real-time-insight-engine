@@ -8,7 +8,9 @@
   "references": [
     { "path": "../core" },
     { "path": "../device-enless-twin-temp" },
-    { "path": "../app-twin-temp-failed-closed" }
+    { "path": "../app-twin-temp-failed-closed" },
+    { "path": "../device-sxs-ecobolt2" },
+    { "path": "../app-ecobolt2-failed-open" }
   ],
   "include": ["src/**/*.ts"]
 }

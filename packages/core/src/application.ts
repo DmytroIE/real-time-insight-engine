@@ -18,6 +18,7 @@ export interface ApplicationDatastream {
   readonly id: DatastreamId;
   evaluateStale(): boolean;
   state(): DatastreamState;
+  lastValue(range?: DatastreamValueRange): DatastreamSample | null;
   averageValue(range?: DatastreamValueRange): DatastreamSample | null;
 }
 

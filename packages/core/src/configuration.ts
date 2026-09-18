@@ -14,6 +14,16 @@ export interface DatastreamConfiguration {
   readonly extra?: JsonValue;
 }
 
+export const DEFAULT_DATASTREAM_CONFIGURATION: Readonly<
+  Pick<DatastreamConfiguration, 'maxBufferLength' | 'maxBufferAgeMs' | 'expectedIntervalMs'>
+> = {
+  maxBufferLength: 10,
+  maxBufferAgeMs: 600_000,
+  expectedIntervalMs: 60_000,
+};
+
+export const DEFAULT_APPLICATION_RUN_INTERVAL_MS = 600_000;
+
 export interface DatafeedReference {
   readonly device: string;
   readonly datastream: string;

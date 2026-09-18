@@ -193,7 +193,7 @@
     <code>applicationDefaults</code> is optional. It provides a default
     <code>runIntervalMs</code>, partial plugin <code>settings</code>, and partial
     <code>datafeedDatastreams</code> settings for an Application type. An Application may omit
-    <code>runIntervalMs</code> only when its type has that default.
+    <code>runIntervalMs</code>; the core fallback is <code>600000</code> milliseconds.
   </p>
   <p>
     <code>deviceDefaults</code> is optional. It provides partial plugin <code>settings</code>
@@ -218,7 +218,9 @@
     <code>gracePeriodCoefficient</code> is optional, defaults to <code>2</code>, and delays an
     empty Datastream <code>NO_DATA</code> alarm until at least that many expected intervals have
     elapsed after Engine startup. Explicit Device Datastream settings win. The final settings
-    must include buffer length, buffer age, and expected interval.
+    start with core bootstrap values of buffer length <code>10</code>, buffer age
+    <code>600000</code> milliseconds, and expected interval <code>60000</code> milliseconds.
+    Replace these bootstrap values with production retention and reporting settings.
   </p>
   <p>
     Device, Asset, Datastream, and Application names are object keys. They may contain spaces,

@@ -1,6 +1,6 @@
 {
   "name": "node-red-contrib-sxs-industrial",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Node-RED adapters for the real-time insight engine",
   "license": "UNLICENSED",
   "engines": {
@@ -22,13 +22,17 @@
     "nodes"
   ],
   "dependencies": {
-    "@sxs/app-twin-temp-failed-closed": "0.4.0",
-    "@sxs/device-enless-twin-temp": "0.4.0",
-    "@sxs/industrial-core": "0.4.0"
+    "@sxs/app-twin-temp-failed-closed": "0.5.0",
+    "@sxs/app-ecobolt2-failed-open": "0.5.0",
+    "@sxs/device-enless-twin-temp": "0.5.0",
+    "@sxs/device-sxs-ecobolt2": "0.5.0",
+    "@sxs/industrial-core": "0.5.0"
   },
   "bundleDependencies": [
     "@sxs/app-twin-temp-failed-closed",
+    "@sxs/app-ecobolt2-failed-open",
     "@sxs/device-enless-twin-temp",
+    "@sxs/device-sxs-ecobolt2",
     "@sxs/industrial-core"
   ]
 }
